@@ -6,8 +6,10 @@ import json
 import os
 import sqlite3
 from dataclasses import asdict
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Event
+from typing import Iterator
 
 from .models import Inventory, Track
 
@@ -43,8 +45,34 @@ class Cache:
             );
         """)
         self.connection.commit()
+        self._deferred = 0
+        self._pending = 0
+        self._commit_every = 0
+
+    @contextmanager
+    def deferred_commits(self, every: int = 256) -> Iterator[None]:
+        """Regroupe les écritures de pistes en transactions de `every` entrées.
+
+        Les entrées déjà lues sont validées à la sortie, y compris après une
+        annulation ou une erreur : un prochain scan peut les réutiliser.
+        """
+        self._deferred += 1
+        previous, self._commit_every = self._commit_every, every
+        try:
+            yield
+        finally:
+            self._deferred -= 1
+            self._commit_every = previous
+            if not self._deferred:
+                self._flush()
+
+    def _flush(self) -> None:
+        if self._pending:
+            self.connection.commit()
+            self._pending = 0
 
     def close(self) -> None:
+        self._flush()
         self.connection.close()
 
     def __enter__(self) -> Cache:
@@ -66,11 +94,25 @@ class Cache:
         return None
 
     def put_track(self, track: Track) -> None:
-        with self.connection:
-            self.connection.execute(
-                "INSERT OR REPLACE INTO tracks VALUES (?, ?, ?, ?)",
-                (track.path, track.size, track.mtime_ns, json.dumps(asdict(track))),
-            )
+        if not self._deferred:
+            with self.connection:
+                self._insert_track(track)
+            return
+        try:
+            self._insert_track(track)
+        except sqlite3.Error:
+            self.connection.rollback()
+            self._pending = 0
+            raise
+        self._pending += 1
+        if self._pending >= self._commit_every:
+            self._flush()
+
+    def _insert_track(self, track: Track) -> None:
+        self.connection.execute(
+            "INSERT OR REPLACE INTO tracks VALUES (?, ?, ?, ?)",
+            (track.path, track.size, track.mtime_ns, json.dumps(asdict(track))),
+        )
 
     def save_inventory(self, inventory: Inventory) -> None:
         with self.connection:

@@ -12,7 +12,7 @@ from typing import Callable
 
 from .audit import audit_album
 from .cache import Cache, ScanCancelled, check_cancel
-from .identity import file_identity
+from .identity import MountCache, file_identity
 from .metadata import AUDIO_EXTENSIONS, read_track
 from .models import Album, Inventory
 from .normalization import name_key
@@ -69,46 +69,10 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
     inventory = Inventory(str(root), scanned_at=datetime.now(timezone.utc).isoformat())
     albums: dict[Path, Album] = {}
     grouped_folders: dict[Path, set[Path]] = {}
-    unstable_source = False
-    for index, (path, initial) in enumerate(sorted(found), start=1):
-        check_cancel(cancel)
-        folder = path.parent
-        disc_match = DISC_FOLDER.fullmatch(folder.name) if folder != root else None
-        album_folder = folder.parent if disc_match else folder
-        album = albums.setdefault(album_folder, Album(str(album_folder)))
-        grouped_folders.setdefault(album_folder, set()).add(folder)
-        try:
-            if is_link(path):
-                raise OSError("Le fichier est devenu un lien pendant le scan")
-            current = path.stat(follow_symlinks=False)
-            if (current.st_size, current.st_mtime_ns) != (initial.st_size, initial.st_mtime_ns):
-                raise OSError("Le fichier a changé pendant le scan")
-            track = cache.get_track(path, current)
-            if track is None:
-                track = read_track(path, current)
-                final = path.stat(follow_symlinks=False)
-                if (final.st_size, final.st_mtime_ns, final.st_ino) != (current.st_size, current.st_mtime_ns, current.st_ino):
-                    raise OSError("Le fichier a changé pendant la lecture des tags")
-                cache.put_track(track)
-            track.device, track.inode = file_identity(path, current)
-            if disc_match:
-                inferred = int(disc_match.group(1))
-                if not track.value("discnumber"):
-                    track.tags["discnumber"] = [str(inferred)]
-                elif track.disc != inferred:
-                    album.issues.append(f"Regroupement ambigu : {folder.name} contredit le numéro de disque de {path.name}")
-            album.tracks.append(track)
-        except (OSError, ValueError, TypeError) as exc:
-            if isinstance(exc, OSError) and exc.errno not in (errno.EACCES, errno.EPERM):
-                # Disparition, déconnexion ou modification concurrente : ne pas
-                # transformer un scan instable en inventaire de référence.
-                unstable_source = True
-            album.complete = False
-            issue = f"Fichier illisible : {path} : {exc}"
-            album.issues.append(issue)
-            inventory.errors.append(issue)
-        if progress:
-            progress(index, len(found), str(path))
+    mounts = MountCache()
+    with cache.deferred_commits():
+        unstable_source = _read_tracks(root, found, cache, mounts, inventory, albums,
+                                       grouped_folders, cancel, progress)
     for folder, album in sorted(albums.items()):
         if folder in grouped_folders[folder] and len(grouped_folders[folder]) > 1:
             album.issues.append("Regroupement ambigu : pistes à la racine de l'album et dans des sous-dossiers de disques")
@@ -130,3 +94,51 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
         raise ScanUnavailable("La racine est vide alors qu'un inventaire existe ; vérifier le montage. Inventaire précédent conservé.")
     cache.save_inventory(inventory)
     return inventory
+
+
+def _read_tracks(root: Path, found: list[tuple[Path, os.stat_result]], cache: Cache,
+                 mounts: MountCache, inventory: Inventory, albums: dict[Path, Album],
+                 grouped_folders: dict[Path, set[Path]], cancel: Event | None,
+                 progress: Callable[[int, int, str], None] | None) -> bool:
+    """Lit ou réutilise les pistes ; renvoie vrai si la source a été instable."""
+    unstable_source = False
+    for index, (path, initial) in enumerate(sorted(found), start=1):
+        check_cancel(cancel)
+        folder = path.parent
+        disc_match = DISC_FOLDER.fullmatch(folder.name) if folder != root else None
+        album_folder = folder.parent if disc_match else folder
+        album = albums.setdefault(album_folder, Album(str(album_folder)))
+        grouped_folders.setdefault(album_folder, set()).add(folder)
+        try:
+            if is_link(path):
+                raise OSError("Le fichier est devenu un lien pendant le scan")
+            current = path.stat(follow_symlinks=False)
+            if (current.st_size, current.st_mtime_ns) != (initial.st_size, initial.st_mtime_ns):
+                raise OSError("Le fichier a changé pendant le scan")
+            track = cache.get_track(path, current)
+            if track is None:
+                track = read_track(path, current)
+                final = path.stat(follow_symlinks=False)
+                if (final.st_size, final.st_mtime_ns, final.st_ino) != (current.st_size, current.st_mtime_ns, current.st_ino):
+                    raise OSError("Le fichier a changé pendant la lecture des tags")
+                cache.put_track(track)
+            track.device, track.inode = file_identity(path, current, mounts)
+            if disc_match:
+                inferred = int(disc_match.group(1))
+                if not track.value("discnumber"):
+                    track.tags["discnumber"] = [str(inferred)]
+                elif track.disc != inferred:
+                    album.issues.append(f"Regroupement ambigu : {folder.name} contredit le numéro de disque de {path.name}")
+            album.tracks.append(track)
+        except (OSError, ValueError, TypeError) as exc:
+            if isinstance(exc, OSError) and exc.errno not in (errno.EACCES, errno.EPERM):
+                # Disparition, déconnexion ou modification concurrente : ne pas
+                # transformer un scan instable en inventaire de référence.
+                unstable_source = True
+            album.complete = False
+            issue = f"Fichier illisible : {path} : {exc}"
+            album.issues.append(issue)
+            inventory.errors.append(issue)
+        if progress:
+            progress(index, len(found), str(path))
+    return unstable_source

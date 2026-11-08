@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.2** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
+La version **0.3** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.2.1](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.2.1) est publiée et ses [vérifications GitHub](https://github.com/1002-AZ-2001/MusicScope/actions/runs/42529092684) ont réussi, installations Debian et Arch comprises.
+La [version v0.3.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.3.0) accélère le scan des grandes bibliothèques ; la [version v0.2.1](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.2.1) reste disponible. Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.2.1-1_amd64.deb
+sudo apt install ./musicscope_0.3.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.2.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.3.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -167,6 +167,16 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 Les tests couvrent le scan, le cache et sa conservation, les copies renommées, les liens physiques lorsque disponibles, FLAC/MP3, les variantes avec bonus, les multidisques, les albums incomplets, les tags incohérents et les réponses MusicBrainz ambiguës ou indisponibles. Les appels HTTP sont simulés. Les tests d'interface utilisent Qt sans écran.
 
 La validation locale est effectuée **sous Linux, avec Python 3.12 et Qt en mode `offscreen`**. Les essais en conteneurs Debian et Arch sont distingués des simulations dans les tests. Un véritable partage TrueNAS/NFS/SMB et les services distants réels restent à essayer avec vos accès.
+
+### Mesurer le scan sur votre stockage
+
+Le test de charge génère sa propre bibliothèque FLAC synthétique ; il refuse un dossier qui contient déjà des fichiers et n'ouvre jamais votre médiathèque. Pour mesurer un partage NAS, indiquez un dossier **vide** sur ce partage :
+
+```bash
+.venv/bin/python scripts/benchmark_scan.py --albums 1000 --tracks 12 --library /mnt/nas/musicscope-essai --json mesure.json
+```
+
+Le rapport donne la durée du scan à froid et à chaud, le débit en pistes par seconde, la comparaison des candidats, la mémoire maximale et le nombre de lectures de la table des montages. Le dossier généré et le cache temporaire sont supprimés à la fin, sauf avec `--keep`.
 
 Voir les [commandes et résultats de validation](docs/validation.md). L'exécutable propose aussi `--self-test` : le moteur et l'interface Qt sont vérifiés sur un corpus temporaire, sans réseau ni médiathèque privée.
 

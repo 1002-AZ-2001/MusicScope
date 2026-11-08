@@ -1,4 +1,14 @@
-# Feuille de route appliquée — version 0.2
+# Feuille de route appliquée
+
+## Version 0.3 — charge et cache des points de montage
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Cache des points de montage | `mountinfo` lu une fois par scan et à chaque nouveau périphérique, décisions mémorisées par dossier ; mêmes résultats que la version 0.2.1, vérifiés par un oracle de 300 tables aléatoires. | Sous Windows, le cache du volume Win32 est testé par simulation seulement. |
+| Écritures groupées du cache | Pistes validées par lots de 256, et à la fin d'un scan annulé ou interrompu. | Une autre instance qui lit le cache pendant un scan voit ces entrées avec un léger retard. |
+| Test de charge | `scripts/benchmark_scan.py` génère une bibliothèque synthétique et mesure scan à froid, scan à chaud, comparaison, mémoire et lectures de `mountinfo`. | Mesures sur disque local : la latence d'un partage NFS/SMB n'est pas reproduite. |
+
+## Version 0.2
 
 La version 0.2 ajoute les trois chantiers et les idées complémentaires proposés après le premier audit. Les commandes sont accessibles dans les menus de l'application. L'audit reste en lecture seule ; seul le rangement expressément confirmé peut renommer un dossier.
 
@@ -25,6 +35,6 @@ Les appels HTTP sont simulés dans les tests ; le serveur Jellyfin privé et les
 ## Améliorations suivantes possibles
 
 - Distribution signée Windows et installateurs intégrés après essais sur vos postes.
-- Tests de charge sur une grande bibliothèque NAS et cache des points de montage.
+- Mesure sur votre NAS réel avec `scripts/benchmark_scan.py`, puis parallélisation prudente des lectures de tags si la latence réseau domine.
 - Transfert entre volumes avec copie vérifiée et journal multiétape, dans un chantier distinct.
 - Écriture de tags avec sauvegarde et restauration, si vous souhaitez l'ajouter ultérieurement.

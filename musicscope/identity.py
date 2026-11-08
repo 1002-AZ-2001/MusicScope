@@ -86,23 +86,95 @@ def windows_file_identity(path: str | Path, info: os.stat_result,
     return info.st_dev, info.st_ino
 
 
-def file_identity(path: Path, info: os.stat_result) -> tuple[int | None, int | None]:
+def _unescape_mount(field: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), field)
+
+
+def read_mount_points() -> dict[str, frozenset[str]]:
+    """Points de montage -> types de systèmes de fichiers (montages empilés compris)."""
+    table: dict[str, set[str]] = {}
+    with open("/proc/self/mountinfo", encoding="utf-8") as stream:
+        for line in stream:
+            left, right = line.split(" - ", 1)
+            mount = str(Path(_unescape_mount(left.split()[4])))
+            table.setdefault(mount, set()).add(right.split()[0])
+    return {mount: frozenset(types) for mount, types in table.items()}
+
+
+class MountCache:
+    """Instantané des montages pour un parcours, sans relecture à chaque fichier.
+
+    La décision reste celle de la sonde unitaire : le montage le plus profond
+    contenant le chemin doit porter un seul type de système de fichiers local.
+    Elle est mémorisée par dossier parent et périphérique. Un périphérique non
+    encore rencontré déclenche une relecture de la table : un montage ou un
+    démontage pendant le scan change le st_dev observé et n'est donc pas
+    masqué par l'instantané. Une instance par thread.
+    """
+
+    def __init__(self, reader: Callable[[], dict[str, frozenset[str]]] | None = None):
+        self._reader = reader or read_mount_points
+        self._table: dict[str, frozenset[str]] | None = None
+        self._devices: set[int] = set()
+        self._decisions: dict[tuple[str, int], bool] = {}
+        self._volumes: dict[tuple[str, int], WindowsVolume | None] = {}
+        self.reloads = 0
+
+    def _reload(self) -> None:
+        self.reloads += 1
+        self._decisions.clear()
+        self._devices.clear()
+        try:
+            self._table = self._reader()
+        except (OSError, ValueError, IndexError):
+            self._table = None
+
+    def _filesystems(self, path: Path) -> frozenset[str]:
+        assert self._table is not None
+        for candidate in (path, *path.parents):
+            types = self._table.get(str(candidate))
+            if types is not None:
+                return types
+        return frozenset()
+
+    def is_local(self, path: Path, device: int) -> bool:
+        if device not in self._devices:
+            self._reload()
+            self._devices.add(device)
+        if self._table is None:
+            return False
+        if str(path) in self._table:
+            # Fichier lui-même point de montage (bind mount) : pas de mémoïsation.
+            filesystems = self._filesystems(path)
+            return len(filesystems) == 1 and filesystems <= LOCAL_POSIX_FILESYSTEMS
+        key = (str(path.parent), device)
+        decision = self._decisions.get(key)
+        if decision is None:
+            filesystems = self._filesystems(path.parent)
+            decision = len(filesystems) == 1 and filesystems <= LOCAL_POSIX_FILESYSTEMS
+            self._decisions[key] = decision
+        return decision
+
+    def windows_volume(self, path_text: str, device: int,
+                       probe: Callable[[str], WindowsVolume | None]) -> WindowsVolume | None:
+        """Volume Win32 mémorisé par dossier parent et numéro de série observé."""
+        key = (path_text.rsplit("\\", 1)[0].casefold(), device)
+        if key not in self._volumes:
+            self._volumes[key] = probe(path_text)
+        return self._volumes[key]
+
+
+def file_identity(path: Path, info: os.stat_result,
+                  mounts: MountCache | None = None) -> tuple[int | None, int | None]:
+    """Sans `mounts`, la table des montages est relue pour ce seul fichier."""
     if os.name == "nt":
-        return windows_file_identity(path, info)
+        if mounts is None:
+            return windows_file_identity(path, info)
+        cache = mounts
+        return windows_file_identity(
+            path, info, lambda text: cache.windows_volume(text, info.st_dev, _windows_volume))
     if os.name != "posix" or not info.st_ino or not info.st_dev:
         return None, None
-    try:
-        mounts = []
-        with open("/proc/self/mountinfo", encoding="utf-8") as stream:
-            for line in stream:
-                left, right = line.split(" - ", 1)
-                mount = re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), left.split()[4])
-                if path == Path(mount) or Path(mount) in path.parents:
-                    mounts.append((len(mount), right.split()[0]))
-        longest = max(length for length, _ in mounts) if mounts else 0
-        filesystems = {filesystem for length, filesystem in mounts if length == longest}
-        if len(filesystems) != 1 or not filesystems <= LOCAL_POSIX_FILESYSTEMS:
-            return None, None
-    except (OSError, ValueError, IndexError):
+    if not (mounts or MountCache()).is_local(Path(path), info.st_dev):
         return None, None
     return info.st_dev, info.st_ino

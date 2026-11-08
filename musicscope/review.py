@@ -12,7 +12,7 @@ import sqlite3
 import stat
 
 from .audit import audit_album
-from .identity import file_identity
+from .identity import MountCache, file_identity
 from .models import Album, Inventory, Track
 
 RULES_VERSION = "musicscope-review-1"
@@ -179,6 +179,7 @@ def storage_summary(inventory: Inventory, exact_groups=()) -> StorageSummary:
     tracks = _tracks(inventory)
     result = StorageSummary(sum(track.size for track in tracks.values()), None, None)
     identities, info = {}, {}
+    mounts = MountCache()
     for track in tracks.values():
         if track.device is None or track.inode is None:
             result.reasons.append("Identité physique indisponible ou inventaire périmé : volume physique et récupération indéterminés.")
@@ -187,7 +188,7 @@ def storage_summary(inventory: Inventory, exact_groups=()) -> StorageSummary:
         if current is None:
             result.reasons.append("Identité physique indisponible ou inventaire périmé : volume physique et récupération indéterminés.")
             return result
-        identity = file_identity(Path(track.path), current)
+        identity = file_identity(Path(track.path), current, mounts)
         if identity != (track.device, track.inode):
             result.reasons.append("Identité physique du volume non vérifiable : volume physique et récupération indéterminés.")
             return result

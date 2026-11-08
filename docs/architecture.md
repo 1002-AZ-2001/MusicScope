@@ -10,7 +10,7 @@ L'application sépare le moteur d'analyse de l'interface Qt. Le moteur et ses te
 | `metadata.py` | Lecture Mutagen des formats natifs et correspondance des tags ID3, Vorbis et MP4. |
 | `normalization.py` | Clés Unicode de comparaison, sans modification des valeurs affichées. |
 | `scanner.py` | Découverte des fichiers, exclusion des liens, regroupement des disques et construction d'un inventaire. |
-| `identity.py` | Vérification conservatrice du volume local et des identifiants physiques Linux ou Windows. |
+| `identity.py` | Vérification conservatrice du volume local et des identifiants physiques Linux ou Windows ; cache des points de montage par parcours. |
 | `cache.py` | Cache SQLite des tags, hachages SHA-256 et derniers inventaires par racine. |
 | `audit.py` | Champs manquants, incohérences et numérotation d'album suspecte. |
 | `comparison.py` | Index des candidats, comparaison des albums et recherche exacte des fichiers. |
@@ -49,6 +49,8 @@ Le regroupement est fondé sur les dossiers, et non sur l'égalité du tag Album
 
 Le parcours ne suit pas les liens symboliques ni les jonctions. Les erreurs d'accès de parcours ou les modifications concurrentes détectées empêchent la sauvegarde du nouvel inventaire de référence. Les erreurs de lecture d'un fichier audio invalide sont enregistrées dans un album incomplet. La transaction de sauvegarde de l'inventaire est atomique ; les entrées de cache individuelles déjà lues peuvent être réutilisées lors d'un prochain essai.
 
+Les entrées de pistes lues sont validées par lots de 256 pendant le scan, puis à la fin du parcours, y compris après une annulation ou une erreur. Un autre processus qui consulte le cache pendant un scan peut donc voir ces entrées avec un léger retard ; l'inventaire de référence reste enregistré en une seule transaction.
+
 Le cache utilise le triplet chemin/taille/date de modification. Cette stratégie ne détecte pas une modification volontaire qui restituerait exactement la même taille et la même date. Les hachages sont lus en flux et vérifient la version du fichier avant et après lecture ; un fichier remplacé ou modifié pendant cette opération n'est pas accepté.
 
 ## Lecture seule et sorties
@@ -68,6 +70,8 @@ Les valeurs des tags sont considérées comme des données : elles sont échapp�
 ## Comparaisons et niveau de preuve
 
 Les candidats sont indexés par MBID d'édition, MBID de groupe d'éditions et clé artiste d'album/titre. Certaines mentions d'édition sont retirées de la seule clé de candidature ; les titres d'origine restent disponibles pour la comparaison et l'affichage.
+
+Sous Linux, la table `/proc/self/mountinfo` est lue une fois par parcours au lieu d'une fois par fichier. La décision est mémorisée par dossier parent et périphérique (`st_dev`), avec la même règle qu'auparavant : le montage le plus profond contenant le chemin doit porter un seul type de système de fichiers local. Un périphérique non encore rencontré provoque une relecture de la table ; un montage ou un démontage pendant le scan n'est donc pas masqué par l'instantané. Un fichier qui est lui-même un point de montage est évalué sans mémoïsation. Sous Windows, le volume Win32 est mémorisé par dossier parent et numéro de série ; une sonde en échec n'est pas mémorisée. Cette partie Windows est testée par simulation uniquement.
 
 L'identité physique n'est retenue que lorsque le scanner fournit une identité locale exploitable, puis que les fichiers correspondent encore à cette identité. Les montages locaux Linux reconnus et les volumes locaux NTFS/ReFS vérifiables sous Windows sont pris en charge. Les partages réseau et volumes non vérifiables restent indéterminés. Les sondes Win32 sont testées par simulation sous Linux ; leur exécution réelle sous Windows reste à valider. Un hash identique n'est pas assimilé à un lien physique.
 
