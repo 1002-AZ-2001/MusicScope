@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MusicScope
+Comment=Music library inventory and metadata audit
+Comment[fr]=Inventaire et audit de votre médiathèque musicale
+Exec=/usr/bin/musicscope
+Icon=musicscope
+Terminal=false
+Categories=AudioVideo;Audio;
+StartupWMClass=MusicScope

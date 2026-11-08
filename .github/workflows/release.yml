@@ -1,0 +1,94 @@
+name: Paquets Debian et Arch Linux
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Construire et vérifier Debian 12 et Arch Linux
+    runs-on: ubuntu-22.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - name: Bibliothèques graphiques et outils Debian
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dpkg-dev xvfb xauth libglib2.0-0 libgl1 fontconfig libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-keysyms1 libxcb-image0 libxcb-render-util0 libxcb-shape0
+      - run: uv sync --locked --extra test --extra build
+      - run: uv run --no-sync python -m pytest -q
+      - name: Bundle portable et paquet Debian
+        run: uv run --no-sync python scripts/build_release.py
+      - name: Vérifier aussi le démarrage graphique X11
+        run: xvfb-run -a env QT_QPA_PLATFORM=xcb dist/MusicScope/MusicScope --self-test
+      - name: Construire le paquet Arch avec makepkg non-root
+        run: |
+          docker run --rm -v "$PWD/build/arch:/build" -w /build archlinux:base-devel bash -euc '
+            useradd -m packager
+            chown -R packager:packager /build
+            runuser -u packager -- makepkg --noconfirm --nodeps
+          '
+          cp build/arch/*.pkg.tar.zst release/
+      - name: Installer, tester et retirer le paquet sous Debian 12
+        run: |
+          docker run --rm -v "$PWD/release:/packages:ro" debian:12-slim sh -ec '
+            apt-get update
+            apt-get install -y --no-install-recommends /packages/musicscope_*_amd64.deb
+            QT_QPA_PLATFORM=offscreen musicscope --self-test
+            dpkg -r musicscope
+            test ! -e /opt/musicscope
+          '
+      - name: Installer, tester et retirer le paquet sous Arch Linux
+        run: |
+          docker run --rm -v "$PWD/release:/packages:ro" archlinux:base bash -euc '
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm --needed libglvnd libx11 libxkbcommon libxkbcommon-x11 fontconfig freetype2 dbus glib2 libxcb xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-image xcb-util-renderutil zlib xorg-server-xvfb xorg-xauth
+            pacman -U --noconfirm /packages/musicscope-*.pkg.tar.zst
+            QT_QPA_PLATFORM=offscreen musicscope --self-test
+            xvfb-run -a env QT_QPA_PLATFORM=xcb musicscope --self-test
+            pacman -R --noconfirm musicscope
+            test ! -e /opt/musicscope
+          '
+      - run: python scripts/build_release.py --checksums-only release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-linux
+          path: |
+            release/*.tar.gz
+            release/*.deb
+            release/*.pkg.tar.zst
+            release/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    name: Publier les paquets Linux validés
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-linux
+          path: release
+      - name: Créer ou actualiser la version GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/*.deb release/*.pkg.tar.zst release/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.deb release/*.pkg.tar.zst release/SHA256SUMS --verify-tag --title "MusicScope $GITHUB_REF_NAME — Debian et Arch Linux" --notes-file docs/distribution.md
+          fi

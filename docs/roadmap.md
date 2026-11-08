@@ -1,0 +1,30 @@
+# Feuille de route appliquée — version 0.2
+
+La version 0.2 ajoute les trois chantiers et les idées complémentaires proposés après le premier audit. Les commandes sont accessibles dans les menus de l'application. L'audit reste en lecture seule ; seul le rangement expressément confirmé peut renommer un dossier.
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Diagnostic Jellyfin | Catalogue paginé par GET, correspondances explicites serveur/poste, fichiers absents, entrées dupliquées et chemins non résolus distincts. | Votre serveur, sa clé API et ses correspondances sont requis ; aucun test sur votre instance privée n'a été effectué. |
+| Empreintes et AcoustID | Empreinte Chromaprint locale d'une piste, recherche d'enregistrements à la demande, résultats et liens sourcés. | fpcalc externe et clé d'application AcoustID requis ; un enregistrement ne prouve pas une édition. |
+| Pochettes | Consultation des faces avant Cover Art Archive par édition, miniatures, comparaison SHA-256 et liens d'origine. | Des pochettes identiques ne prouvent pas l'identité des albums. |
+| Rangement assisté | Prévisualisation Artiste/Album (année), conflits et liens physiques vérifiés, déplacement confirmé et journal de restauration. | Même volume uniquement ; aucun effacement ni écriture de tags. Un album imbriqué non inventorié bloque le déplacement du parent. |
+| Distribution | Exécutable PyInstaller pour Debian et Arch Linux, paquets .deb et .pkg.tar.zst, autotest du moteur et de Qt, archives et SHA-256, workflow de publication sur tag. | Linux x86-64 uniquement pour cette publication ; Windows est reporté. |
+| Décisions personnelles | « Conserver les deux », « À revoir », « Faux positif », avec note et date dans le cache. | Les décisions deviennent anciennes si leurs preuves changent. Aucune suppression automatique. |
+| Estimation d'espace | Volume apparent, identités physiques uniques et borne prudente des copies SHA-256. | Identité inconnue, preuve périmée ou lien externe : estimation indéterminée. |
+| Qualité priorisée | Erreurs de lecture, inventaires incomplets, incohérences, numérotation et tags manquants, filtrables par catégorie. | Les constats restent consultatifs. |
+| Coût du hachage | Prévisualisation du volume candidat et du volume non encore en cache ; annulation et reprise par cache. | Une taille et une date falsifiées intentionnellement restent une limite du cache. |
+| Session réimportable | Export JSON versionné, import historique et correspondances de chemins explicites. | Un import ne devient pas une observation actuelle ; refaire un scan avant les actions sur les fichiers. |
+| Alias d'artistes | Recherche MusicBrainz avec identifiants, graphies, alias et liens sourcés. | Les homonymes restent distincts ; aucune fusion automatique ni réécriture du nom. |
+
+## Validation sur votre installation
+
+Essayer d'abord un petit sous-ensemble TrueNAS : multidisque, compilation, import Lidarr avec hardlinks et deux éditions. Vérifier les correspondances serveur/poste Jellyfin avant toute conclusion d'absence.
+
+Les appels HTTP sont simulés dans les tests ; le serveur Jellyfin privé et les services distants réels restent à vérifier avec vos accès. Les paquets Linux sont distincts du code Windows, conservé mais sans distribution binaire pour cette publication.
+
+## Améliorations suivantes possibles
+
+- Distribution signée Windows et installateurs intégrés après essais sur vos postes.
+- Tests de charge sur une grande bibliothèque NAS et cache des points de montage.
+- Transfert entre volumes avec copie vérifiée et journal multiétape, dans un chantier distinct.
+- Écriture de tags avec sauvegarde et restauration, si vous souhaitez l'ajouter ultérieurement.

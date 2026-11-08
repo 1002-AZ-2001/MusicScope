@@ -1,0 +1,5 @@
+include uv.lock
+include musicscope.spec
+recursive-include docs *.md *.png
+recursive-include scripts *.py *.sh *.txt *.md
+recursive-include scripts/build_assets *
