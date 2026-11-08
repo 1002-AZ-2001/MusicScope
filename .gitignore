@@ -8,4 +8,5 @@ build/
 dist/
 release/
 *.spec.bak
+test-results.xml
 demo-library/

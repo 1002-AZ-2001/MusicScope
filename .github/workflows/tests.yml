@@ -25,4 +25,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libglib2.0-0 libgl1 fontconfig libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0 libxcb-icccm4 libxcb-keysyms1 libxcb-image0 libxcb-render-util0
       - run: uv sync --locked --extra test
-      - run: uv run --no-sync python -m pytest -q
+      - run: uv run --no-sync python -m pytest -q --junitxml=test-results.xml
+      - name: Résumer les échecs dans les annotations
+        if: failure()
+        run: python scripts/report_ci_failures.py test-results.xml
