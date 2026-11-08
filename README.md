@@ -14,6 +14,17 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
+La [version v0.2.1](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.2.1) est publiée et ses [vérifications GitHub](https://github.com/1002-AZ-2001/MusicScope/actions/runs/42529092684) ont réussi, installations Debian et Arch comprises.
+
+```bash
+# Debian 12 ou ultérieure, après téléchargement du .deb
+sudo apt install ./musicscope_0.2.1-1_amd64.deb
+# Arch Linux, après téléchargement du paquet Arch
+sudo pacman -U ./musicscope-0.2.1-1-x86_64.pkg.tar.zst
+# Lancer l'application après installation
+musicscope
+```
+
 Les commandes de construction, les sommes de contrôle et les prérequis graphiques figurent dans le [guide de distribution](docs/distribution.md). La présence du workflow dans le dépôt ne prouve pas à elle seule qu'une version binaire a été construite : vérifier les fichiers attachés à la version.
 
 ### Windows — PowerShell
