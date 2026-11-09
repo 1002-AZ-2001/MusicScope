@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musicscope"
-version = "0.3.0"
+version = "0.4.0"
 description = "Audit musical, diagnostic Jellyfin et rangement assisté"
 requires-python = ">=3.12"
 dependencies = ["PySide6>=6.7,<7", "mutagen>=1.47,<2"]
@@ -20,7 +20,7 @@ musicscope = "musicscope.__main__:main"
 include = ["musicscope*"]
 
 [tool.setuptools.package-data]
-musicscope = ["data/*.flac", "data/*.mp3"]
+musicscope = ["data/*.flac", "data/*.mp3", "data/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

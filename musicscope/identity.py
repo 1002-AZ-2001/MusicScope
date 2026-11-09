@@ -164,6 +164,20 @@ class MountCache:
         return self._volumes[key]
 
 
+def is_local_storage(path: Path, mounts: MountCache | None = None) -> bool:
+    """Vrai si la racine est sur un volume local reconnu (même règle que l'identité physique)."""
+    try:
+        info = Path(path).stat()
+        if os.name == "nt":
+            text = str(path).replace("/", "\\")
+            if text.startswith("\\\\") and not re.match(r"^\\\\\?\\[a-zA-Z]:\\", text):
+                return False
+            return _windows_volume(text) is not None
+        return os.name == "posix" and (mounts or MountCache()).is_local(Path(path), info.st_dev)
+    except (OSError, AttributeError, ValueError):
+        return False
+
+
 def file_identity(path: Path, info: os.stat_result,
                   mounts: MountCache | None = None) -> tuple[int | None, int | None]:
     """Sans `mounts`, la table des montages est relue pour ce seul fichier."""

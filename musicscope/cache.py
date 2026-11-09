@@ -121,6 +121,34 @@ class Cache:
                 (inventory.root, json.dumps(inventory.to_dict(), ensure_ascii=False)),
             )
 
+    def prune_missing(self, root: str | Path, present: set[str]) -> int:
+        """Retire les tags et hachages des fichiers disparus sous `root`.
+
+        À appeler seulement après un parcours complet et réussi : `present`
+        contient alors tous les fichiers audio actuels de la racine. Les
+        entrées des autres racines ne sont jamais touchées.
+        """
+        prefix = str(Path(root).absolute()).rstrip(os.sep) + os.sep
+        # Intervalle [prefix, prefix avec séparateur + 1) : tous les chemins sous la racine.
+        upper = prefix[:-1] + chr(ord(os.sep) + 1)
+        removed = 0
+        with self.connection:
+            for table in ("tracks", "hashes"):
+                stale = [(path,) for (path,) in self.connection.execute(
+                    f"SELECT path FROM {table} WHERE path >= ? AND path < ?", (prefix, upper))
+                    if path not in present]
+                self.connection.executemany(f"DELETE FROM {table} WHERE path=?", stale)
+                removed += len(stale)
+        return removed
+
+    def stats(self) -> dict[str, int]:
+        """Volume du cache, pour l'information de l'utilisateur."""
+        counts = {table: self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                  for table in ("tracks", "hashes", "inventories")}
+        counts["bytes"] = sum(path.stat().st_size for path in self.path.parent.glob(self.path.name + "*")
+                              if path.is_file())
+        return counts
+
     def load_inventory(self, root: str | Path) -> Inventory | None:
         row = self.connection.execute(
             "SELECT body FROM inventories WHERE root=?", (str(Path(root).absolute()),)

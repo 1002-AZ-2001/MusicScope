@@ -49,6 +49,10 @@ Le regroupement est fondé sur les dossiers, et non sur l'égalité du tag Album
 
 Le parcours ne suit pas les liens symboliques ni les jonctions. Les erreurs d'accès de parcours ou les modifications concurrentes détectées empêchent la sauvegarde du nouvel inventaire de référence. Les erreurs de lecture d'un fichier audio invalide sont enregistrées dans un album incomplet. La transaction de sauvegarde de l'inventaire est atomique ; les entrées de cache individuelles déjà lues peuvent être réutilisées lors d'un prochain essai.
 
+Le scan se déroule en quatre temps. Les vérifications `stat` des fichiers découverts sont lancées en parallèle, puis le thread appelant consulte le cache SQLite. Les fichiers absents du cache ou modifiés sont lus en parallèle ; chaque résultat est enregistré dans le cache par le thread appelant dès qu'il arrive. L'inventaire est enfin assemblé dans l'ordre trié des chemins. Le résultat ne dépend donc pas de l'ordre d'achèvement des threads. Le nombre de threads est automatique : 1 sur un volume local reconnu, 8 sur un partage réseau ou un volume inconnu ; `--workers` le force. Une annulation abandonne les lectures non commencées et conserve en cache celles déjà terminées.
+
+Après une analyse complète enregistrée, les entrées de tags et de hachages des fichiers qui ne sont plus présents sous la racine sont supprimées. Un scan annulé ou instable ne supprime rien.
+
 Les entrées de pistes lues sont validées par lots de 256 pendant le scan, puis à la fin du parcours, y compris après une annulation ou une erreur. Un autre processus qui consulte le cache pendant un scan peut donc voir ces entrées avec un léger retard ; l'inventaire de référence reste enregistré en une seule transaction.
 
 Le cache utilise le triplet chemin/taille/date de modification. Cette stratégie ne détecte pas une modification volontaire qui restituerait exactement la même taille et la même date. Les hachages sont lus en flux et vérifient la version du fichier avant et après lecture ; un fichier remplacé ou modifié pendant cette opération n'est pas accepté.

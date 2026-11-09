@@ -26,7 +26,7 @@ from mutagen.flac import FLAC
 
 from musicscope.cache import Cache
 from musicscope.comparison import candidates, compare_albums
-from musicscope.scanner import scan
+from musicscope.scanner import auto_workers, scan
 
 MOUNTINFO = "/proc/self/mountinfo"
 
@@ -76,10 +76,10 @@ def count_mountinfo_reads():
         builtins.open = original
 
 
-def timed_scan(root: Path, cache_path: Path) -> dict:
+def timed_scan(root: Path, cache_path: Path, workers: int | None = None) -> dict:
     with Cache(cache_path) as cache, count_mountinfo_reads() as counter:
         start = time.perf_counter()
-        inventory = scan(root, cache)
+        inventory = scan(root, cache, workers=workers)
         elapsed = time.perf_counter() - start
     tracks = sum(len(album.tracks) for album in inventory.albums)
     return {"seconds": round(elapsed, 3), "albums": len(inventory.albums), "tracks": tracks,
@@ -95,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duplicate-every", type=int, default=10,
                         help="Une copie exacte tous les N albums (0 : aucune)")
     parser.add_argument("--library", type=Path, help="Dossier vide où générer (défaut : temporaire)")
+    parser.add_argument("--workers", type=int,
+                        help="Threads de lecture (défaut : automatique selon le stockage)")
     parser.add_argument("--keep", action="store_true", help="Conserver bibliothèque et cache")
     parser.add_argument("--json", type=Path, help="Écrire le rapport JSON dans ce fichier")
     args = parser.parse_args(argv)
@@ -113,8 +115,8 @@ def main(argv: list[str] | None = None) -> int:
         files_created = generate(library, args.albums, args.tracks, args.duplicate_every)
         generation = time.perf_counter() - start
 
-        cold = timed_scan(library, cache_path)
-        warm = timed_scan(library, cache_path)
+        cold = timed_scan(library, cache_path, args.workers)
+        warm = timed_scan(library, cache_path, args.workers)
         inventory = warm.pop("inventory")
         cold.pop("inventory")
 
@@ -128,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
                       "pairs": len(pairs), "statuses": statuses}
 
         report = {
-            "python": platform.python_version(), "platform": platform.platform(),
+            "python": platform.python_version(), "platform": platform.platform(), "workers": args.workers or auto_workers(library),
             "library": {"files": files_created, "generation_seconds": round(generation, 2)},
             "cold_scan": cold, "warm_scan": warm, "comparison": comparison,
             "max_rss_mib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),

@@ -111,7 +111,7 @@ def test_full_qt_scan_compare_exact_export_and_restore(window, tmp_path, monkeyp
     try:
         assert restored.root == str(library)
         assert restored.album_model.rowCount() == window.album_model.rowCount()
-        assert "Inventaire précédent chargé" in restored.state.text()
+        assert "chargé depuis le cache" in restored.state.text()
     finally:
         restored.close()
         restored.deleteLater()

@@ -195,7 +195,7 @@ def test_deferred_commits_batch_and_survive_cancellation(tmp_path, monkeypatch):
     monkeypatch.setattr("musicscope.scanner.read_track", reader)
     with Cache(database) as cache:
         with pytest.raises(ScanCancelled):
-            scan(source, cache, cancel)
+            scan(source, cache, cancel, workers=1)
         assert cache.load_inventory(source) is None
     with sqlite3.connect(database) as other:
         assert other.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 7

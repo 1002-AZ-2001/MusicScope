@@ -3,16 +3,23 @@ from __future__ import annotations
 
 import html
 import json
+import platform
+import sqlite3
 import threading
+from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version as package_version
+from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QSortFilterProxyModel, Qt, QThread, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices, QStandardItem, QStandardItemModel
+from PySide6.QtCore import QSortFilterProxyModel, Qt, QThread, QUrl, Signal, Slot, qVersion
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+    QAbstractItemView, QApplication, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton,
     QSplitter, QTabWidget, QTableView, QTextBrowser, QVBoxLayout, QWidget,
 )
+
+from . import __version__
 
 from .audit import audit_album
 from .cache import Cache
@@ -24,8 +31,79 @@ from .paths import check_cache_outside_library
 from .scanner import ScanCancelled, scan
 
 
+REPOSITORY_URL = "https://github.com/1002-AZ-2001/MusicScope"
+DOCUMENTATION_URL = f"{REPOSITORY_URL}#readme"
+ISSUES_URL = f"{REPOSITORY_URL}/issues"
+
+
 def escaped(value) -> str:
     return html.escape(str(value))
+
+
+def app_icon() -> QIcon:
+    """Icône PNG embarquée : aucun module d'image SVG requis dans le binaire."""
+    pixmap = QPixmap()
+    pixmap.loadFromData(files("musicscope").joinpath("data/musicscope.png").read_bytes(), "PNG")
+    return QIcon(pixmap)
+
+
+def _dependency_version(name: str) -> str:
+    try:
+        return package_version(name)
+    except PackageNotFoundError:
+        return "inconnue"
+
+
+def about_html(cache_dir: Path) -> str:
+    """Version, licence, composants et état du cache, sans accès réseau."""
+    try:
+        with Cache(cache_dir / "inventory.sqlite3") as cache:
+            stats = cache.stats()
+        cache_text = (f"{stats['tracks']} fichiers aux tags mémorisés, {stats['hashes']} SHA-256, "
+                      f"{stats['inventories']} inventaire(s) ; {stats['bytes'] / 2**20:.1f} Mio")
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        # L'état du cache est une information facultative de la fenêtre.
+        cache_text = f"indisponible ({exc})"
+    rows = [
+        ("Version", __version__),
+        ("Licence", "GNU AGPLv3"),
+        ("Dépôt", f"<a href='{REPOSITORY_URL}'>{REPOSITORY_URL}</a>"),
+        ("Signaler un problème", f"<a href='{ISSUES_URL}'>{ISSUES_URL}</a>"),
+        ("Python", escaped(platform.python_version())),
+        ("Qt / PySide6", f"{escaped(qVersion())} / {escaped(_dependency_version('PySide6'))}"),
+        ("Mutagen", escaped(_dependency_version("mutagen"))),
+        ("Système", escaped(platform.platform())),
+        ("Cache", f"{escaped(cache_dir)}<br>{escaped(cache_text)}"),
+    ]
+    table = "".join(f"<tr><td style='padding-right:14px;color:#80cbc4'>{name}</td><td>{value}</td></tr>"
+                    for name, value in rows)
+    return (f"<h2>MusicScope {escaped(__version__)}</h2>"
+            "<p>Audit musical en lecture seule : inventaire, ressemblances entre albums, "
+            "vérification des métadonnées et rangement confirmé.</p>"
+            "<p>Les analyses réutilisent le cache local : seuls les fichiers modifiés sont relus. "
+            "Sur un partage réseau, les accès disque sont parallélisés.</p>"
+            f"<table>{table}</table>")
+
+
+class AboutDialog(QDialog):
+    def __init__(self, cache_dir: Path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("À propos de MusicScope")
+        self.setWindowIcon(app_icon())
+        self.resize(620, 470)
+        layout = QVBoxLayout(self)
+        header = QHBoxLayout()
+        logo = QLabel()
+        logo.setPixmap(app_icon().pixmap(72, 72))
+        header.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
+        self.text = QTextBrowser()
+        self.text.setOpenExternalLinks(True)
+        self.text.setHtml(about_html(cache_dir))
+        header.addWidget(self.text, 1)
+        layout.addLayout(header)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
 
 class Task(QThread):
@@ -92,7 +170,9 @@ class MainWindow(QMainWindow):
         self.result_callback = None
         self.root = ""
         self.setWindowTitle("MusicScope — Audit de votre médiathèque")
+        self.setWindowIcon(app_icon())
         self.resize(1320, 860)
+        self.help_menu = self._build_help_menu()
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setContentsMargins(22, 18, 22, 18)
@@ -202,6 +282,36 @@ class MainWindow(QMainWindow):
                                 "« Vérifier avec MusicBrainz ». Aucun tag n’est écrit.</p>")
         self.load_preferences()
 
+    def _build_help_menu(self) -> QMenu:
+        menu = self.menuBar().addMenu("Aide")
+        actions = [
+            ("Documentation en ligne", lambda: QDesktopServices.openUrl(QUrl(DOCUMENTATION_URL)), None),
+            ("Signaler un problème…", lambda: QDesktopServices.openUrl(QUrl(ISSUES_URL)), None),
+            ("Ouvrir le dossier du cache", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.cache_dir))), None),
+            (None, None, None),
+            ("À propos de MusicScope", self.show_about, QKeySequence(QKeySequence.StandardKey.HelpContents)),
+            ("À propos de Qt", lambda: QMessageBox.aboutQt(self), None),
+        ]
+        for title, callback, shortcut in actions:
+            if title is None:
+                menu.addSeparator()
+                continue
+            action = QAction(title, self)
+            action.triggered.connect(lambda checked=False, callback=callback: callback())
+            if shortcut is not None:
+                action.setShortcut(shortcut)
+            menu.addAction(action)
+        return menu
+
+    def add_menu(self, title: str) -> QMenu:
+        """Menu inséré avant « Aide », qui reste le dernier de la barre."""
+        menu = QMenu(title, self)
+        self.menuBar().insertMenu(self.help_menu.menuAction(), menu)
+        return menu
+
+    def show_about(self):
+        AboutDialog(self.cache_dir, self).exec()
+
     def load_preferences(self):
         try:
             self.root = json.loads((self.cache_dir / "preferences.json").read_text("utf-8"))["root"]
@@ -214,7 +324,13 @@ class MainWindow(QMainWindow):
                 cache.close()
             if saved:
                 self.display_inventory(saved)
-                self.state.setText("Inventaire précédent chargé. Relancez l’analyse pour actualiser les fichiers.")
+                try:
+                    when = datetime.fromisoformat(saved.scanned_at).astimezone().strftime("%d/%m/%Y à %H:%M")
+                except ValueError:
+                    when = "date inconnue"
+                self.state.setText(f"Inventaire du {when} chargé depuis le cache ({len(saved.albums)} albums), "
+                                   "sans relire les fichiers. Relancez l’analyse pour actualiser : "
+                                   "seuls les fichiers modifiés seront relus.")
         except (OSError, ValueError, KeyError):
             self.root = ""
 
