@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.4 — lecture parallèle, cache entretenu et aide
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Lecture parallèle | Vérification des fichiers et lecture des tags sur 8 threads lorsque la racine est sur un partage réseau ; lecture séquentielle sur disque local. Cache SQLite, table des montages et assemblage restent dans un seul thread : inventaire identique au mode séquentiel. | Gain mesuré sur latence simulée ; votre NAS réel reste à mesurer avec `scripts/benchmark_scan.py --workers 1` puis `--workers 8`. |
+| Cache entretenu | Inventaire rechargé au lancement avec sa date ; entrées des fichiers disparus retirées après une analyse complète ; volume du cache affiché. | Chaque analyse vérifie encore la taille et la date de chaque fichier : c'est ce qui garantit qu'une modification de tags est vue. |
+| Aide | Icône de fenêtre, menu Aide (documentation, problèmes, dossier du cache), fenêtre « À propos » avec versions et licence. | Les liens ouvrent le navigateur du système. |
+
 ## Version 0.3 — charge et cache des points de montage
 
 | Chantier | Fonction livrée | Limite à connaître |
@@ -35,6 +43,7 @@ Les appels HTTP sont simulés dans les tests ; le serveur Jellyfin privé et les
 ## Améliorations suivantes possibles
 
 - Distribution signée Windows et installateurs intégrés après essais sur vos postes.
-- Mesure sur votre NAS réel avec `scripts/benchmark_scan.py`, puis parallélisation prudente des lectures de tags si la latence réseau domine.
+- Mesure sur votre NAS réel avec `scripts/benchmark_scan.py --workers 1` puis `--workers 8`, pour ajuster le nombre de threads.
+- Recherche exacte SHA-256 parallèle sur partage réseau, sur le même modèle que le scan.
 - Transfert entre volumes avec copie vérifiée et journal multiétape, dans un chantier distinct.
 - Écriture de tags avec sauvegarde et restauration, si vous souhaitez l'ajouter ultérieurement.

@@ -1,6 +1,25 @@
-# Validation — MusicScope 0.3.0
+# Validation — MusicScope 0.4.0
 
-Validation du 8 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+Validation du 9 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.4.0 — lecture parallèle, cache entretenu et aide
+
+Mesures réalisées dans un conteneur cloud Linux (4 processeurs, ext4 local, Python 3.13.18) avec `scripts/benchmark_scan.py` et des FLAC synthétiques.
+
+**Partage réseau simulé.** 1 ms ajoutée à chaque `stat` et 4 ms à chaque lecture de tags, 3 960 pistes :
+
+| Threads | Scan à froid | Scan à chaud |
+| ---: | ---: | ---: |
+| 1 | 37,4 s | 14,7 s |
+| 8 | 10,6 s | 6,6 s |
+
+**Disque local, 13 200 pistes.** Avec 8 threads forcés, le scan à froid passe de 6,5 s à 14,3 s : le décodage des tags est limité par le GIL de Python. Le mode automatique reste donc séquentiel sur un volume local. En mode automatique, deux mesures de la 0.4.0 donnent 3,3 s et 3,2 s à froid, 1,2 s et 1,0 s à chaud. Sur la même machine, la 0.3.0 donnait entre 3,7 et 4,6 s à froid et entre 1,3 et 1,4 s à chaud : aucune régression, et la variance de la machine dépasse ces écarts.
+
+La latence est simulée : un NAS réel peut se comporter autrement. Pour mesurer, lancer `scripts/benchmark_scan.py --library <dossier vide du partage> --workers 1`, puis la même commande avec `--workers 8`.
+
+Un test compare l'inventaire produit avec 1 et 8 threads, avec des achèvements volontairement désordonnés : il est identique. Autres tests : accès SQLite limité au thread appelant, lectures réellement simultanées, annulation qui conserve en cache toutes les lectures terminées, déconnexion qui préserve l'inventaire précédent, purge limitée aux fichiers disparus de la racine analysée, choix automatique du nombre de threads, menu Aide, fenêtre « À propos » et message de chargement depuis le cache, progression fichier par fichier en mode séquentiel.
+
+**299 tests** passent sous Python 3.12.13 et 3.13.18, Qt en mode `offscreen`. La construction locale PyInstaller réussit : l'auto-test du binaire figé passe et l'icône est embarquée. Le `.deb` 0.4.0 est construit. Le scan JSON du corpus de démonstration donne 8 albums et 16 pistes avec 1 comme avec 4 threads.
 
 ## Version 0.3.0 — charge et cache des points de montage
 

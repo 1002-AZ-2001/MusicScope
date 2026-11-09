@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.3** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
+La version **0.4** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.3.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.3.0) accélère le scan des grandes bibliothèques ; la [version v0.2.1](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.2.1) reste disponible. Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.4.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.4.0) parallélise la lecture sur les partages réseau et ajoute le menu **Aide** ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.3.0-1_amd64.deb
+sudo apt install ./musicscope_0.4.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.3.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.4.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -92,6 +92,8 @@ Les petits fichiers audio de référence sont inclus dans le paquet. FFmpeg a se
 6. Sélectionnez un seul album, puis **Vérifier avec MusicBrainz**. Les éditions candidates, leurs liens, les motifs d'écart et les propositions de tags sont affichés. Les propositions ne sont jamais appliquées.
 7. **Exporter CSV** enregistre l'inventaire et les constats disponibles, y compris les comparaisons, erreurs et vérifications MusicBrainz exécutées pendant la session.
 
+Le menu **Aide** ouvre la documentation, le suivi des problèmes et le dossier du cache. **À propos de MusicScope** (touche F1) affiche la version, la licence, les versions de Python, Qt et Mutagen, ainsi que le volume du cache.
+
 Le filtre concerne les tableaux d'inventaire et de rapprochements. L'export couvre les constats de la session, même lorsqu'un filtre masque certaines lignes. Les résultats de comparaison et MusicBrainz affichés dans l'interface sont réinitialisés après un nouveau scan ; exportez-les si vous souhaitez conserver ces constats.
 
 ## Fonctions de la feuille de route
@@ -134,6 +136,10 @@ Les formats lus sont FLAC, MP3, M4A, Ogg Vorbis et Opus. Les tags distinguent ar
 
 Chaque dossier d'album reste distinct. Les sous-dossiers reconnus comme `CD1`, `Disc 02` ou `Disque 2` sont rattachés au dossier parent ; les regroupements ambigus sont signalés. Les liens symboliques et jonctions sont ignorés.
 
+Au lancement, le dernier inventaire est rechargé depuis le cache SQLite, sans relire la médiathèque. Une nouvelle analyse vérifie la taille et la date de chaque fichier, mais ne relit les tags que des fichiers ajoutés ou modifiés. Après une analyse complète, les entrées des fichiers disparus sont retirées du cache.
+
+Sur un partage réseau (NFS, SMB/CIFS, chemin UNC ou lecteur réseau), ces vérifications et lectures sont lancées sur 8 threads pour masquer la latence. Sur un disque local, la lecture reste séquentielle : le décodage des tags y est limité par le processeur et des threads le ralentiraient. L'inventaire produit est identique dans les deux modes.
+
 Les lectures de tags et les SHA-256 sont mis en cache par chemin, taille et date de modification. Un scan annulé ou un parcours inaccessible ne remplace pas le dernier inventaire complet. Par prudence, une racine soudainement vide alors qu'un inventaire non vide existe est également refusée : vérifiez alors le montage du partage. Un fichier audio invalide est signalé et rend son album incomplet.
 
 Emplacement du cache par défaut :
@@ -155,6 +161,8 @@ Le scan JSON permet d'utiliser le moteur sans l'interface :
 
 ```bash
 .venv/bin/python -m musicscope --cache /tmp/musicscope-cache --scan /mnt/Musique > inventaire.json
+# Forcer le nombre de threads de lecture (défaut : automatique)
+.venv/bin/python -m musicscope --cache /tmp/musicscope-cache --scan /mnt/Musique --workers 8 > inventaire.json
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 ```
 

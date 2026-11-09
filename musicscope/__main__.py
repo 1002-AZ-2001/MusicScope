@@ -16,6 +16,7 @@ def main() -> int:
     parser.add_argument("--cache", type=Path, default=default_cache_dir(), help="Cache local, hors médiathèque")
     parser.add_argument("--demo", type=Path, metavar="DOSSIER", help="Créer le jeu synthétique dans un dossier vide")
     parser.add_argument("--scan", type=Path, metavar="RACINE", help="Inventorier sans interface et afficher du JSON")
+    parser.add_argument("--workers", type=int, metavar="N", help="Threads de lecture pour --scan (défaut : automatique)")
     args = parser.parse_args()
     try:
         if args.self_test:
@@ -33,7 +34,7 @@ def main() -> int:
             from .scanner import scan
             cache = Cache(args.cache / "inventory.sqlite3")
             try:
-                inventory = scan(args.scan, cache)
+                inventory = scan(args.scan, cache, workers=args.workers)
                 print(json.dumps(inventory.to_dict(), ensure_ascii=False, indent=2))
             finally:
                 cache.close()
@@ -42,6 +43,9 @@ def main() -> int:
         from .advanced_gui import AdvancedWindow as MainWindow
         app = QApplication(sys.argv[:1])
         app.setApplicationName("MusicScope")
+        app.setApplicationVersion(__version__)
+        from .gui import app_icon
+        app.setWindowIcon(app_icon())
         app.setOrganizationName("MusicScope")
         window = MainWindow(args.cache)
         window.show()

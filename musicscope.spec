@@ -8,7 +8,7 @@ analysis = Analysis(
     [str(root / "scripts" / "frozen_entry.py")],
     pathex=[str(root)],
     binaries=[],
-    datas=collect_data_files("musicscope", includes=["data/*.flac", "data/*.mp3"]),
+    datas=collect_data_files("musicscope", includes=["data/*.flac", "data/*.mp3", "data/*.png"]),
     hiddenimports=collect_submodules("musicscope") + collect_submodules("mutagen"),
     hookspath=[],
     hooksconfig={},
