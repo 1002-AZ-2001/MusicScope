@@ -4,6 +4,12 @@ Validation du 8 novembre 2026. Les cibles de distribution restent Debian et Arch
 
 ## Version 0.3.0 — charge et cache des points de montage
 
+### Publication vérifiée sur GitHub
+
+La [release v0.3.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.3.0) contient le `.deb`, le `.pkg.tar.zst`, l'archive portable et leurs SHA-256. Le [workflow de publication](https://github.com/1002-AZ-2001/MusicScope/actions/runs/42702837266) a réussi : suite de tests, construction du binaire, installation et retrait sous Debian 12, installation et retrait sous Arch, autotests offscreen et X11, puis publication des fichiers.
+
+### Charge et cache des points de montage
+
 Mesures réalisées avec `scripts/benchmark_scan.py` dans un conteneur cloud Linux (4 processeurs, ext4 local, Python 3.13.18), sur des FLAC synthétiques étiquetés et une copie exacte tous les 10 albums. Même machine et mêmes paramètres avant et après la modification :
 
 | Bibliothèque | Version | Scan à froid | Scan à chaud | Lectures `mountinfo` | Mémoire maximale |
