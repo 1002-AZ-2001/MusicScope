@@ -68,7 +68,7 @@ def select(window, *names):
 
 def test_quality_decisions_cost_exact_and_session_history(window, tmp_path, monkeypatch):
     scanned(window, tmp_path)
-    assert window.tabs.count() == 12
+    assert window.tabs.count() == 13
     assert window.quality_model.rowCount() > 0
     window.quality_filter.setCurrentIndex(1)
     assert window.quality_proxy.rowCount() > 0

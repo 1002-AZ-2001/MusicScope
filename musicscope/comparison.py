@@ -13,6 +13,7 @@ from typing import Iterable
 from uuid import UUID
 
 from .models import Album, Inventory, Track
+from .folder_names import parse_folder
 from .normalization import name_key
 
 
@@ -69,10 +70,20 @@ def candidates(albums: Iterable[Album]) -> list[tuple[Album, Album]]:
         if not artists:
             artists = _signatures(album, "artist")
         titles = album.values("album")
+        keys = set()
         if len(artists) == 1 and len(titles) == 1:
             artist, title = next(iter(artists)), _base_title(next(iter(titles)))
             if artist and title:
-                index[("name", artist, title)].append(i)
+                keys.add(("name", artist, title))
+        # Nom du dossier (« 2014 - Artiste - Album », « Album (2014) »…) : retrouve
+        # les copies aux tags absents ou différents. Le statut reste décidé
+        # par la comparaison des pistes.
+        folder = parse_folder(album.path)
+        artist, title = (name_key(folder.artist),), _base_title(folder.title)
+        if artist[0] and title:
+            keys.add(("name", artist, title))
+        for key in keys:
+            index[key].append(i)
     pairs = {pair for bucket in index.values() for pair in combinations(bucket, 2)}
     return [(albums[i], albums[j]) for i, j in sorted(pairs)]
 

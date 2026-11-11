@@ -21,6 +21,7 @@ L'application sépare le moteur d'analyse de l'interface Qt. Le moteur et ses te
 | `recognition.py`, `artwork.py`, `aliases.py` | Empreintes Chromaprint, AcoustID, pochettes et alias sourcés, déclenchés à la demande. |
 | `review.py`, `session.py` | Décisions liées aux preuves, estimation prudente, coût SHA et sessions historiques versionnées. |
 | `tagwriter.py`, `tag_editor_gui.py` | Écriture de tags confirmée : différences, journal SQLite des valeurs d'origine, relecture de contrôle et annulation ; dialogues de saisie et d'aperçu. |
+| `folder_names.py`, `duplicates.py` | Lecture des conventions de nommage des dossiers d'album ; groupes d'albums en double, niveau de confiance et copie recommandée. |
 | `organizer.py` | Plan de déplacement, renommage atomique sans remplacement, journal durable et restauration. |
 | `selftest.py` | Autotest sans réseau du paquet source ou gelé. |
 | `export.py` | Export CSV UTF-8 avec BOM, séparateur point-virgule et neutralisation des formules de tableur. |
@@ -71,6 +72,12 @@ L'import JSON efface les identités physiques et conserve le caractère historiq
 La création de démonstration est une opération distincte, explicitement demandée avec `--demo`, qui écrit des fichiers synthétiques dans un dossier vide ou inexistant. Elle ne réutilise jamais une médiathèque existante comme destination non vide.
 
 Les valeurs des tags sont considérées comme des données : elles sont échappées dans les présentations HTML et les valeurs pouvant être interprétées comme des formules sont neutralisées dans les exports CSV.
+
+## Albums en double et quarantaine
+
+Les candidats sont aussi indexés par l'artiste et le titre lus dans le nom du dossier (`folder_names.py`), avec la même clé que les tags : une copie aux tags absents ou différents rejoint ainsi les candidats. Le statut reste celui de la comparaison des pistes. `duplicates.py` réunit les albums reliés par une comparaison concluante (union des paires) ; une paire « À vérifier » n'est retenue que si les deux noms de dossiers désignent le même album et la même année. Les éditions distinctes ne sont jamais regroupées. Le niveau de confiance d'un groupe est celui de son lien le plus faible.
+
+La quarantaine réutilise le plan de rangement (`plan_quarantine` partage ses contrôles avec `plan_album`) : destination `<racine>/_MusicScope_doublons/<chemin relatif>`, suffixe « (2) » en cas de collision, même volume, aucun remplacement, contenu et inventaire vérifiés, journal JSON restaurable. Le scanner ignore ce dossier à la racine.
 
 ## Écriture de tags
 
