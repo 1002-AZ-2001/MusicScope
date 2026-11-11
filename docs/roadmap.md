@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.7 — albums en double
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Détection | Conventions de nommage des dossiers reconnues pour trouver les copies aux tags absents ou différents ; groupes avec niveau de confiance. | Un nom de dossier hors de ces conventions n'est utilisé que comme titre. |
+| Recommandation | Copie à garder selon complétude, format, nombre de pistes, tags, MBID et constats ; choix manuel obligatoire si équivalence ou incertitude. | Le format prime sur le nombre de pistes : une édition plus longue en MP3 reste derrière une édition FLAC complète. |
+| Quarantaine | Déplacement journalisé vers `_MusicScope_doublons`, restaurable, ignoré par le scan. | Pas de suppression : la quarantaine se vide à la main. Le partage qBittorrent des fichiers déplacés est interrompu. |
+
 ## Version 0.6 — éditeur de tags
 
 | Chantier | Fonction livrée | Limite à connaître |

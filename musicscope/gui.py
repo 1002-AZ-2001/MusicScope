@@ -134,6 +134,13 @@ def make_browser(external_links: bool = False) -> QTextBrowser:
     return browser
 
 
+def byte_size(value: int) -> str:
+    for unit, size in (("Gio", 2**30), ("Mio", 2**20), ("Kio", 2**10)):
+        if value >= size:
+            return f"{value / size:.1f} {unit}"
+    return f"{value} octets"
+
+
 def format_scan_date(value: str) -> str:
     try:
         return datetime.fromisoformat(value).astimezone().strftime("%d/%m/%Y à %H:%M")
