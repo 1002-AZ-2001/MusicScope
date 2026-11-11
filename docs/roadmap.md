@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.5 — interface réorganisée
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Navigation | Barre latérale en quatre sections avec compteurs à la place de onze onglets ; menus Fichier et Affichage ; Jellyfin et Sources regroupés dans Services. | Les pages et leur contenu sont inchangés. |
+| Lisibilité | Thème sombre unifié (tableaux, panneaux de détail, dialogues), chemins relatifs à la racine, statuts de rapprochement colorés, date d'analyse lisible. | Le thème suit la feuille de style de l'application, pas celui du système. |
+| Ergonomie | Barre d'état avec progression et annulation, raccourcis clavier, clic droit et double-clic sur l'inventaire, taille de fenêtre mémorisée. | — |
+
 ## Version 0.4 — lecture parallèle, cache entretenu et aide
 
 | Chantier | Fonction livrée | Limite à connaître |
@@ -45,5 +53,6 @@ Les appels HTTP sont simulés dans les tests ; le serveur Jellyfin privé et les
 - Distribution signée Windows et installateurs intégrés après essais sur vos postes.
 - Mesure sur votre NAS réel avec `scripts/benchmark_scan.py --workers 1` puis `--workers 8`, pour ajuster le nombre de threads.
 - Recherche exacte SHA-256 parallèle sur partage réseau, sur le même modèle que le scan.
+- Éditeur de tags (album et pistes) avec aperçu, journal et annulation : version 0.6.
 - Transfert entre volumes avec copie vérifiée et journal multiétape, dans un chantier distinct.
 - Écriture de tags avec sauvegarde et restauration, si vous souhaitez l'ajouter ultérieurement.

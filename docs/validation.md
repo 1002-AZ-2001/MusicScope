@@ -1,6 +1,12 @@
-# Validation — MusicScope 0.4.0
+# Validation — MusicScope 0.5.0
 
-Validation du 9 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.5.0 — interface réorganisée
+
+Les tests d'interface vérifient la barre latérale (sections, onze pages, en-têtes non sélectionnables, synchronisation avec les pages), les compteurs, les menus Fichier et Affichage avec leurs raccourcis, l'affichage relatif des chemins sans modification des données, les actions du clic droit selon la sélection, la barre d'état, la couleur des statuts et la mémorisation de la géométrie avec la racine. **308 tests** passent sous Python 3.12 et 3.13 (Qt `offscreen`). Les écrans Inventaire, Rapprochements et Qualité ont été contrôlés par captures, avec le style Fusion et la palette sombre de l'application.
+
+La disposition n'a pas été essayée sur votre bureau : l'échelle d'affichage et le thème du système peuvent modifier légèrement le rendu.
 
 ## Version 0.4.0 — lecture parallèle, cache entretenu et aide
 

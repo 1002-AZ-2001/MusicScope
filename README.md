@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.4** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
+La version **0.5** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.4.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.4.0) parallélise la lecture sur les partages réseau et ajoute le menu **Aide** ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.5.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.5.0) réorganise l'interface : navigation latérale, barre d'état, thème sombre unifié et raccourcis clavier ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.4.0-1_amd64.deb
+sudo apt install ./musicscope_0.5.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.4.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.5.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -84,6 +84,20 @@ Les petits fichiers audio de référence sont inclus dans le paquet. FFmpeg a se
 
 ## Parcours dans l'interface
 
+La barre latérale regroupe les pages en quatre sections : **Bibliothèque** (inventaire, erreurs de lecture, qualité), **Doublons** (rapprochements, fichiers identiques, décisions), **Services** (MusicBrainz, Jellyfin, sources) et **Organisation** (rangement, session). Le nombre d'éléments de chaque page s'affiche à côté de son nom. Les chemins des tableaux sont affichés relativement à la racine ; l'infobulle et l'export CSV gardent le chemin complet. La progression et les messages apparaissent dans la barre d'état, en bas de la fenêtre. La taille de la fenêtre est mémorisée.
+
+| Raccourci | Action |
+| --- | --- |
+| Ctrl+O | Choisir le dossier |
+| F5 | Analyser ou actualiser |
+| Ctrl+F | Filtrer |
+| Ctrl+E | Exporter CSV |
+| Ctrl+1 à Ctrl+9 | Aller à une page de la barre latérale |
+| Échap | Annuler l'opération en cours |
+| F1 | À propos de MusicScope |
+
+Un clic droit sur un ou deux albums de l'inventaire propose les actions possibles pour cette sélection (comparer, MusicBrainz, pochettes, rangement…). Un double-clic ouvre le dossier de l'album. Dans **Rapprochements**, les copies certaines sont en orange, les éditions probables en jaune et les éditions distinctes en vert.
+
 1. **Choisir le dossier** lance l'inventaire. **Analyser** l'actualise ensuite. Le parcours et la lecture des fichiers tournent en arrière-plan ; la progression, l'annulation et les erreurs sont visibles.
 2. Dans **Inventaire**, triez les colonnes ou utilisez le filtre. Sélectionnez un album pour consulter ses pistes et tags actuels. **Ouvrir le dossier** ouvre l'explorateur du système.
 3. Dans **Rapprochements**, consultez les candidats trouvés par identifiants MusicBrainz ou par artiste d'album/titre normalisés. Le détail présente les deux albums côte à côte et les raisons du statut.
@@ -92,7 +106,7 @@ Les petits fichiers audio de référence sont inclus dans le paquet. FFmpeg a se
 6. Sélectionnez un seul album, puis **Vérifier avec MusicBrainz**. Les éditions candidates, leurs liens, les motifs d'écart et les propositions de tags sont affichés. Les propositions ne sont jamais appliquées.
 7. **Exporter CSV** enregistre l'inventaire et les constats disponibles, y compris les comparaisons, erreurs et vérifications MusicBrainz exécutées pendant la session.
 
-Le menu **Aide** ouvre la documentation, le suivi des problèmes et le dossier du cache. **À propos de MusicScope** (touche F1) affiche la version, la licence, les versions de Python, Qt et Mutagen, ainsi que le volume du cache.
+Les menus **Fichier** et **Affichage** reprennent ces actions et pages. Le menu **Services** regroupe Jellyfin, les empreintes AcoustID, les pochettes et les alias. Le menu **Aide** ouvre la documentation, le suivi des problèmes et le dossier du cache. **À propos de MusicScope** (touche F1) affiche la version, la licence, les versions de Python, Qt et Mutagen, ainsi que le volume du cache.
 
 Le filtre concerne les tableaux d'inventaire et de rapprochements. L'export couvre les constats de la session, même lorsqu'un filtre masque certaines lignes. Les résultats de comparaison et MusicBrainz affichés dans l'interface sont réinitialisés après un nouveau scan ; exportez-les si vous souhaitez conserver ces constats.
 

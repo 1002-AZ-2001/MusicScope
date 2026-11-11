@@ -43,6 +43,9 @@ def main() -> int:
         from .advanced_gui import AdvancedWindow as MainWindow
         app = QApplication(sys.argv[:1])
         app.setApplicationName("MusicScope")
+        app.setStyle("Fusion")
+        from .gui import dark_palette
+        app.setPalette(dark_palette())
         app.setApplicationVersion(__version__)
         from .gui import app_icon
         app.setWindowIcon(app_icon())

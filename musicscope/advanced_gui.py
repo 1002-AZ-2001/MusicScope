@@ -5,15 +5,15 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QTimer, Qt, QUrl, Slot
+from PySide6.QtCore import QSize, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .gui import MainWindow, append_row, escaped, make_table
+from .gui import MainWindow, RelativePathDelegate, append_row, escaped, make_browser, make_table
 
 
 def byte_label(value) -> str:
@@ -90,32 +90,26 @@ class AdvancedWindow(MainWindow):
         self.setWindowTitle("MusicScope — Inventaire et revue de votre médiathèque")
         self._build_extended_tabs()
         self._build_menus()
-        self.setStyleSheet(self.styleSheet() + """
-            QDialog {background:#17212b;color:#e9eff5}
-            QMenuBar,QMenu {background:#243744;color:#e9eff5}
-            QMenuBar::item:selected,QMenu::item:selected {background:#147d88}
-        """)
         self.extensions_ready = True
         self.refresh_reviews()
 
     def _build_extended_tabs(self):
         self.jellyfin_table, self.jellyfin_model, self.jellyfin_proxy = make_table(
             ["Statut", "Chemin serveur", "Chemin local", "Titre", "Identifiant catalogue", "Motif"])
-        self.jellyfin_index = self.tabs.addTab(self.jellyfin_table, "Jellyfin")
+        self.jellyfin_index = self.add_page(self.jellyfin_table, "Jellyfin", "Services")
         sources_page = QWidget()
         sources_layout = QVBoxLayout(sources_page)
-        self.sources_details = QTextBrowser()
-        self.sources_details.setOpenExternalLinks(True)
-        self.sources_details.setHtml("<h2>Enregistrements, alias et pochettes</h2><p>Utilisez le menu Sources. "
+        self.sources_details = make_browser(external_links=True)
+        self.sources_details.setHtml("<h2>Enregistrements, alias et pochettes</h2><p>Utilisez le menu Services. "
                                     "Chaque consultation distante est déclenchée à votre demande ; une empreinte "
                                     "d'enregistrement ne détermine pas une édition.</p>")
         sources_layout.addWidget(self.sources_details, 1)
         self.cover_layout = QHBoxLayout()
         sources_layout.addLayout(self.cover_layout)
-        self.sources_index = self.tabs.addTab(sources_page, "Sources")
+        self.sources_index = self.add_page(sources_page, "Sources", "Services")
         quality_page = QWidget()
         quality_layout = QVBoxLayout(quality_page)
-        self.storage_label = QLabel("Estimation de l’espace : menu Revue → Estimer l’espace.")
+        self.storage_label = QLabel("Estimation de l’espace : menu Revue → Estimer l’espace des copies exactes.")
         self.storage_label.setWordWrap(True)
         quality_layout.addWidget(self.storage_label)
         self.quality_filter = QComboBox()
@@ -126,19 +120,25 @@ class AdvancedWindow(MainWindow):
         self.quality_proxy.setFilterKeyColumn(1)
         self.quality_filter.currentIndexChanged.connect(self.filter_quality)
         quality_layout.addWidget(self.quality_table, 1)
-        self.quality_index = self.tabs.addTab(quality_page, "Qualité")
+        self.quality_index = self.add_page(quality_page, "Qualité", "Bibliothèque")
         self.decision_table, self.decision_model, self.decision_proxy = make_table(
             ["Décision", "Album A", "Album B", "Note", "Date", "Validité"])
-        self.decisions_index = self.tabs.addTab(self.decision_table, "Décisions")
-        self.organizer_details = QTextBrowser()
+        self.decisions_index = self.add_page(self.decision_table, "Décisions", "Doublons")
+        self.organizer_details = make_browser()
         self.organizer_details.setHtml("<h2>Rangement assisté</h2><p>Prévisualisez d'abord la destination d'un album "
             "avec le menu Rangement. Le déplacement demande ensuite votre confirmation et crée un journal restaurable. "
             "Les fichiers audio ne sont ni supprimés ni retagués.</p>")
-        self.organizer_index = self.tabs.addTab(self.organizer_details, "Rangement")
-        self.session_details = QTextBrowser()
+        self.organizer_index = self.add_page(self.organizer_details, "Rangement", "Organisation")
+        self.session_details = make_browser()
         self.session_details.setPlainText("Le menu Session exporte ou importe un rapport JSON versionné. "
                                           "Une session importée contient des preuves historiques, à actualiser par un scan.")
-        self.session_index = self.tabs.addTab(self.session_details, "Session")
+        self.session_index = self.add_page(self.session_details, "Session", "Organisation")
+        delegate = RelativePathDelegate(self, self)
+        self.extended_path_delegate = delegate
+        self.quality_table.setItemDelegateForColumn(2, delegate)
+        self.decision_table.setItemDelegateForColumn(1, delegate)
+        self.decision_table.setItemDelegateForColumn(2, delegate)
+        self.jellyfin_table.setItemDelegateForColumn(2, delegate)
 
     def _action(self, menu, title, callback):
         action = QAction(title, self)
@@ -148,9 +148,9 @@ class AdvancedWindow(MainWindow):
         return action
 
     def _build_menus(self):
-        jellyfin = self.add_menu("Jellyfin")
-        self._action(jellyfin, "Configurer et comparer le catalogue…", self.start_jellyfin)
-        sources = self.add_menu("Sources")
+        sources = self.add_menu("Services")
+        self._action(sources, "Diagnostic Jellyfin : configurer et comparer le catalogue…", self.start_jellyfin)
+        sources.addSeparator()
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
         self._action(sources, "Rechercher les alias de l’artiste…", self.resolve_alias)
@@ -167,6 +167,17 @@ class AdvancedWindow(MainWindow):
         self.apply_action = self._action(organize, "Appliquer le déplacement prévisualisé…", self.apply_organization)
         self._action(organize, "Restaurer un déplacement journalisé…", self.restore_organization)
         self.apply_action.setEnabled(False)
+
+    def album_actions(self, selected):
+        actions = super().album_actions(selected)
+        actions += [
+            ("Enregistrer une décision…", self.record_decision, len(selected) == 2),
+            ("Consulter les pochettes…", self.fetch_artworks, len(selected) in (1, 2)),
+            ("Empreinte audio d’une piste…", self.start_recognition, len(selected) == 1),
+            ("Alias de l’artiste…", self.resolve_alias, len(selected) == 1),
+            ("Prévisualiser le rangement…", self.preview_organization, len(selected) == 1),
+        ]
+        return actions
 
     def run_task(self, label, operation, on_result, cancellable=True):
         if self.task is not None:
@@ -212,6 +223,7 @@ class AdvancedWindow(MainWindow):
         if self.extensions_ready:
             self.apply_action.setEnabled(False)
             self.jellyfin_model.removeRows(0, self.jellyfin_model.rowCount())
+            self.set_page_count(self.jellyfin_index, None)
             self.refresh_reviews()
 
     def refresh_reviews(self):
@@ -220,6 +232,7 @@ class AdvancedWindow(MainWindow):
         findings = quality_findings(self.inventory)
         for finding in findings:
             append_row(self.quality_model, [finding.priority, finding.category, finding.album_path, finding.message])
+        self.set_page_count(self.quality_index, len(findings))
         current = self.quality_filter.currentText()
         self.quality_filter.blockSignals(True)
         self.quality_filter.clear()
@@ -259,6 +272,7 @@ class AdvancedWindow(MainWindow):
         self.decision_model.removeRows(0, self.decision_model.rowCount())
         for decision in decisions:
             self._decision_row(decision)
+        self.set_page_count(self.decisions_index, len(decisions))
 
     def _decision_row(self, decision, historical=False):
         data = asdict(decision) if hasattr(decision, "__dataclass_fields__") else decision
@@ -357,6 +371,7 @@ class AdvancedWindow(MainWindow):
             for finding in result.findings:
                 append_row(self.jellyfin_model, [finding.status, finding.server_path, finding.local_path,
                     finding.title, finding.item_id, finding.reason])
+            self.set_page_count(self.jellyfin_index, len(result.findings))
             self.tabs.setCurrentIndex(self.jellyfin_index)
             self.state.setText(("Catalogue examiné. " if result.complete else "Diagnostic incomplet. ") + " | ".join(result.reasons))
         self.run_task("Consultation du catalogue Jellyfin…", operation, done)
