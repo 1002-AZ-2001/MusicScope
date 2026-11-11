@@ -1,4 +1,4 @@
-"""Lecture des tags natifs uniquement : aucune écriture de métadonnées."""
+"""Lecture des tags natifs uniquement ; l'écriture confirmée est dans tagwriter.py."""
 from __future__ import annotations
 
 import os
@@ -34,6 +34,7 @@ ALIASES = {
     "musicbrainz_albumartistid": ["musicbrainzalbumartistid"],
     "musicbrainz_trackid": ["musicbrainztrackid", "musicbrainzrecordingid"],
     "compilation": ["compilation", "TCMP", "cpil"],
+    "genre": ["genre", "TCON", "©gen"],
 }
 
 
@@ -57,7 +58,7 @@ def canonical_tags(native) -> dict[str, list[str]]:
     if not native:
         return {}
     values: dict[str, list[str]] = {}
-    special = {"©nam": "title", "©alb": "album", "©ART": "artist", "©day": "date"}
+    special = {"©nam": "title", "©alb": "album", "©ART": "artist", "©day": "date", "©gen": "genre"}
     for raw_key, raw_value in native.items():
         key = str(raw_key)
         if key.startswith("UFID:"):

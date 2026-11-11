@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.5** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Le rangement est une opération séparée : une prévisualisation, une confirmation manuelle et un journal sont requis avant de renommer un dossier. Aucun effacement ni changement de tags n'est proposé.
+La version **0.6** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Deux opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.5.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.5.0) réorganise l'interface : navigation latérale, barre d'état, thème sombre unifié et raccourcis clavier ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.6.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.6.0) ajoute l'éditeur de tags, journalisé et annulable ; la v0.5.0 a réorganisé l'interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.5.0-1_amd64.deb
+sudo apt install ./musicscope_0.6.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.5.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.6.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -92,9 +92,24 @@ La barre latérale regroupe les pages en quatre sections : **Bibliothèque** (in
 | F5 | Analyser ou actualiser |
 | Ctrl+F | Filtrer |
 | Ctrl+E | Exporter CSV |
+| Ctrl+T | Modifier les tags de l'album sélectionné |
 | Ctrl+1 à Ctrl+9 | Aller à une page de la barre latérale |
 | Échap | Annuler l'opération en cours |
 | F1 | À propos de MusicScope |
+
+### Éditeur de tags
+
+Sélectionnez un album, puis **Tags → Modifier les tags de l'album sélectionné** (Ctrl+T) ou clic droit → **Modifier les tags…**.
+
+- En haut, les champs communs (artiste d'album, album, date, genre) s'appliquent à toutes les pistes. Un champ dont les valeurs diffèrent selon les pistes reste vide ; il n'est modifié que si vous le remplissez.
+- Le tableau modifie chaque piste : disque, numéro, titre, artiste.
+- Plusieurs valeurs se séparent par « ; ». Un champ vidé est supprimé.
+- **Reprendre les propositions MusicBrainz** remplit les champs avec l'édition vérifiée, si l'album a été vérifié dans cette session. Seuls les huit champs ci-dessus sont repris ; les identifiants MusicBrainz restent consultatifs.
+- **Aperçu des modifications** liste chaque changement (avant / après). Rien n'est écrit avant le bouton **Écrire les tags**.
+
+À l'écriture, chaque fichier doit être inchangé depuis la dernière analyse. Ses valeurs d'origine sont enregistrées dans le journal (`tags.sqlite3`, dans le dossier du cache) avant toute modification. Les tags sont ensuite relus : en cas d'écart, les valeurs d'origine sont rétablies. L'inventaire est actualisé automatiquement ; seuls les fichiers modifiés sont relus. Les formats FLAC, MP3 (la version ID3 v2.3 ou v2.4 est conservée), M4A, Ogg Vorbis et Opus sont pris en charge.
+
+La page **Organisation → Journal des tags** liste les modifications et leur détail. **Annuler la modification sélectionnée** rétablit les valeurs d'origine, seulement sur les fichiers qui portent encore les valeurs écrites par MusicScope. Aucune copie des fichiers audio n'est faite : sauvegardez votre médiathèque avant une modification importante.
 
 Un clic droit sur un ou deux albums de l'inventaire propose les actions possibles pour cette sélection (comparer, MusicBrainz, pochettes, rangement…). Un double-clic ouvre le dossier de l'album. Dans **Rapprochements**, les copies certaines sont en orange, les éditions probables en jaune et les éditions distinctes en vert.
 
@@ -103,7 +118,7 @@ Un clic droit sur un ou deux albums de l'inventaire propose les actions possible
 3. Dans **Rapprochements**, consultez les candidats trouvés par identifiants MusicBrainz ou par artiste d'album/titre normalisés. Le détail présente les deux albums côte à côte et les raisons du statut.
 4. Pour une comparaison manuelle, sélectionnez exactement deux albums dans l'inventaire avec **Ctrl + clic**, puis **Comparer 2 albums**. Cette opération peut calculer les SHA-256 si les tailles concordent.
 5. **Recherche exacte SHA-256** recherche les fichiers identiques dans tout l'inventaire, indépendamment de leurs noms. Les fichiers sont préfiltrés par taille, puis hachés en flux. Un groupe de fichiers identiques ne prouve pas qu'un album entier est un doublon.
-6. Sélectionnez un seul album, puis **Vérifier avec MusicBrainz**. Les éditions candidates, leurs liens, les motifs d'écart et les propositions de tags sont affichés. Les propositions ne sont jamais appliquées.
+6. Sélectionnez un seul album, puis **Vérifier avec MusicBrainz**. Les éditions candidates, leurs liens, les motifs d'écart et les propositions de tags sont affichés. Les propositions ne sont pas appliquées automatiquement : l'éditeur de tags peut les reprendre, après aperçu et confirmation.
 7. **Exporter CSV** enregistre l'inventaire et les constats disponibles, y compris les comparaisons, erreurs et vérifications MusicBrainz exécutées pendant la session.
 
 Les menus **Fichier** et **Affichage** reprennent ces actions et pages. Le menu **Services** regroupe Jellyfin, les empreintes AcoustID, les pochettes et les alias. Le menu **Aide** ouvre la documentation, le suivi des problèmes et le dossier du cache. **À propos de MusicScope** (touche F1) affiche la version, la licence, les versions de Python, Qt et Mutagen, ainsi que le volume du cache.

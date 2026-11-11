@@ -101,6 +101,17 @@ def escaped(value) -> str:
     return html.escape(str(value))
 
 
+def install_french_translation(app) -> bool:
+    """Boutons standard de Qt (Oui, Non, Annuler…) en français, si la traduction est fournie."""
+    from PySide6.QtCore import QLibraryInfo, QTranslator
+    translator = QTranslator(app)
+    if translator.load("qtbase_fr", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+        app.installTranslator(translator)
+        app._musicscope_translator = translator  # garder une référence Python
+        return True
+    return False
+
+
 def dark_palette() -> QPalette:
     """Palette assortie à la feuille de style, pour les éléments natifs (barres de défilement…)."""
     palette = QPalette()
@@ -220,6 +231,7 @@ class AboutDialog(QDialog):
         header.addWidget(self.text, 1)
         layout.addLayout(header)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText("Fermer")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 

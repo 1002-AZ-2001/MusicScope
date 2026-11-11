@@ -46,7 +46,7 @@ def test_sidebar_groups_every_page_by_section(window):
     headers = [text for text, index in rows if index is None]
     assert headers == ["BIBLIOTHÈQUE", "DOUBLONS", "SERVICES", "ORGANISATION"]
     pages = sorted(index for _, index in rows if index is not None)
-    assert pages == list(range(window.tabs.count())) and window.tabs.count() == 11
+    assert pages == list(range(window.tabs.count())) and window.tabs.count() == 12
     assert window.tabs.tabBar().isHidden()
     for row in range(window.navigation.count()):
         item = window.navigation.item(row)
@@ -81,7 +81,7 @@ def test_menus_and_shortcuts(window):
     assert len(view) == window.tabs.count()
     assert view[0].shortcut().toString() == "Ctrl+1" and view[0].text() == "Bibliothèque › Inventaire"
     view[-1].trigger()
-    assert window.tabs.currentIndex() == window.session_index
+    assert window.tabs.currentIndex() == window.tags_index
 
 
 def test_relative_paths_are_display_only(window):

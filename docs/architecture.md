@@ -20,6 +20,7 @@ L'application sépare le moteur d'analyse de l'interface Qt. Le moteur et ses te
 | `jellyfin.py` | Catalogue GET paginé et traduction explicite des chemins serveur/poste. |
 | `recognition.py`, `artwork.py`, `aliases.py` | Empreintes Chromaprint, AcoustID, pochettes et alias sourcés, déclenchés à la demande. |
 | `review.py`, `session.py` | Décisions liées aux preuves, estimation prudente, coût SHA et sessions historiques versionnées. |
+| `tagwriter.py`, `tag_editor_gui.py` | Écriture de tags confirmée : différences, journal SQLite des valeurs d'origine, relecture de contrôle et annulation ; dialogues de saisie et d'aperçu. |
 | `organizer.py` | Plan de déplacement, renommage atomique sans remplacement, journal durable et restauration. |
 | `selftest.py` | Autotest sans réseau du paquet source ou gelé. |
 | `export.py` | Export CSV UTF-8 avec BOM, séparateur point-virgule et neutralisation des formules de tableur. |
@@ -70,6 +71,17 @@ L'import JSON efface les identités physiques et conserve le caractère historiq
 La création de démonstration est une opération distincte, explicitement demandée avec `--demo`, qui écrit des fichiers synthétiques dans un dossier vide ou inexistant. Elle ne réutilise jamais une médiathèque existante comme destination non vide.
 
 Les valeurs des tags sont considérées comme des données : elles sont échappées dans les présentations HTML et les valeurs pouvant être interprétées comme des formules sont neutralisées dans les exports CSV.
+
+## Écriture de tags
+
+L'éditeur de tags est la seule partie qui écrit dans les fichiers audio, avec la même interface de Mutagen pour les cinq formats (`easy` : Vorbis, EasyID3, EasyMP4) et huit champs : artiste d'album, album, date, genre, disque, numéro, titre, artiste. Pour chaque fichier :
+
+1. la taille et la date doivent correspondre au dernier scan, sinon le fichier est refusé ;
+2. les valeurs d'origine des champs modifiés sont validées dans `tags.sqlite3` avant l'écriture ;
+3. les tags sont écrits, puis relus et comparés aux valeurs demandées ; en cas d'écart, les valeurs d'origine sont réécrites ;
+4. l'état du fichier (`written`, `failed_restored`, `failed`) est enregistré.
+
+Un fichier MP3 garde sa version ID3 : en ID3v2.3, plusieurs valeurs sont réunies dans un seul texte séparé par « ; ». Les autres tags du fichier ne sont pas modifiés. L'annulation compare les valeurs actuelles à celles écrites : elle ne restaure que les fichiers inchangés depuis, et refuse les autres. Aucune copie complète des fichiers n'est faite ; une coupure pendant l'écriture d'un fichier peut l'endommager, comme avec tout éditeur de tags.
 
 ## Comparaisons et niveau de preuve
 

@@ -44,8 +44,9 @@ def main() -> int:
         app = QApplication(sys.argv[:1])
         app.setApplicationName("MusicScope")
         app.setStyle("Fusion")
-        from .gui import dark_palette
+        from .gui import dark_palette, install_french_translation
         app.setPalette(dark_palette())
+        install_french_translation(app)
         app.setApplicationVersion(__version__)
         from .gui import app_icon
         app.setWindowIcon(app_icon())

@@ -1,6 +1,14 @@
-# Validation — MusicScope 0.5.0
+# Validation — MusicScope 0.6.0
 
 Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.6.0 — éditeur de tags
+
+L'écriture est testée sur de vrais fichiers des cinq formats : FLAC et MP3 du corpus de démonstration, M4A (AAC), Ogg Vorbis et Opus générés une fois avec ffmpeg et versionnés dans `tests/data` (moins de 5 Ko chacun). Pour chaque format, les huit champs sont écrits puis relus par le lecteur de MusicScope, les autres tags sont conservés, et l'annulation rétablit exactement les tags d'origine. D'autres tests vérifient la conservation d'ID3v2.3, le refus d'un fichier modifié depuis le scan (fichier intact, rien de journalisé), le rétablissement après une relecture différente, le refus d'annuler des tags changés depuis, la suppression d'un champ et son rétablissement, l'arrêt sur annulation entre deux fichiers et la limitation des propositions MusicBrainz aux champs modifiables. Côté interface : écriture, actualisation automatique de l'inventaire, journal, annulation, valeurs mixtes non modifiées, aperçu et refus sur un inventaire historique.
+
+**326 tests** passent sous Python 3.12 et 3.13. Le dialogue d'édition, l'aperçu et le journal ont été contrôlés par captures après une écriture réelle sur les cinq formats.
+
+Non essayé : votre NAS (une écriture réseau interrompue reste un risque), et les fichiers aux tags exotiques (plusieurs balises ID3, APEv2 dans un MP3).
 
 ## Version 0.5.0 — interface réorganisée
 

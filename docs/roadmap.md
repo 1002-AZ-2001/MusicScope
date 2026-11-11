@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.6 — éditeur de tags
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Éditeur | Champs communs d'un album et champs de chaque piste, reprise des propositions MusicBrainz, aperçu avant/après. | Huit champs ; pas de modification groupée de plusieurs albums. |
+| Sécurité | Fichier inchangé depuis le scan exigé, valeurs d'origine journalisées avant écriture, relecture de contrôle et rétablissement en cas d'écart. | Pas de copie des fichiers : une coupure pendant l'écriture peut endommager le fichier en cours. |
+| Annulation | Journal des tags avec détail et annulation, limitée aux fichiers non modifiés depuis. | — |
+
 ## Version 0.5 — interface réorganisée
 
 | Chantier | Fonction livrée | Limite à connaître |
@@ -53,6 +61,6 @@ Les appels HTTP sont simulés dans les tests ; le serveur Jellyfin privé et les
 - Distribution signée Windows et installateurs intégrés après essais sur vos postes.
 - Mesure sur votre NAS réel avec `scripts/benchmark_scan.py --workers 1` puis `--workers 8`, pour ajuster le nombre de threads.
 - Recherche exacte SHA-256 parallèle sur partage réseau, sur le même modèle que le scan.
-- Éditeur de tags (album et pistes) avec aperçu, journal et annulation : version 0.6.
+- Modification d'un champ sur plusieurs albums à la fois, avec le même aperçu et le même journal.
+- Écriture des identifiants MusicBrainz proposés.
 - Transfert entre volumes avec copie vérifiée et journal multiétape, dans un chantier distinct.
-- Écriture de tags avec sauvegarde et restauration, si vous souhaitez l'ajouter ultérieurement.
