@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
 )
 
 from .gui import MainWindow, RelativePathDelegate, append_row, escaped, make_browser, make_table
-from .organizer import QUARANTINE_DIR
 
 
 def byte_label(value) -> str:
@@ -96,7 +95,6 @@ class AdvancedWindow(MainWindow):
         self.extensions_ready = True
         self.refresh_reviews()
         self.refresh_tag_journal()
-        self.refresh_duplicates()
 
     def _build_extended_tabs(self):
         self.jellyfin_table, self.jellyfin_model, self.jellyfin_proxy = make_table(
@@ -129,32 +127,6 @@ class AdvancedWindow(MainWindow):
         self.decision_table, self.decision_model, self.decision_proxy = make_table(
             ["Décision", "Album A", "Album B", "Note", "Date", "Validité"])
         self.decisions_index = self.add_page(self.decision_table, "Décisions", "Doublons")
-        duplicates_page = QWidget()
-        duplicates_layout = QVBoxLayout(duplicates_page)
-        duplicates_intro = QLabel("Albums présents plusieurs fois, y compris sous des noms de dossiers différents "
-                                  "(« 2014 - Artiste - Album », « Album (2014) »…). Les copies en trop sont déplacées "
-                                  f"dans « {QUARANTINE_DIR} » à la racine, avec un journal restaurable : rien n’est effacé.")
-        duplicates_intro.setWordWrap(True)
-        duplicates_layout.addWidget(duplicates_intro)
-        self.duplicate_table, self.duplicate_model, self.duplicate_proxy = make_table(
-            ["Confiance", "Album", "Copies", "Copie à garder", "Espace récupérable", "Remarque"])
-        duplicates_layout.addWidget(self.duplicate_table, 2)
-        self.duplicate_details = make_browser()
-        duplicates_layout.addWidget(self.duplicate_details, 1)
-        duplicate_buttons = QHBoxLayout()
-        self.keep_button = QPushButton("Choisir la copie à garder…")
-        self.keep_button.clicked.connect(lambda: self.choose_kept_copy())
-        self.quarantine_button = QPushButton("Mettre en quarantaine les copies en trop…")
-        self.quarantine_button.clicked.connect(lambda: self.quarantine_duplicates())
-        self.restore_quarantine_button = QPushButton("Restaurer depuis la quarantaine…")
-        self.restore_quarantine_button.clicked.connect(lambda: self.restore_organization())
-        for button in (self.keep_button, self.quarantine_button, self.restore_quarantine_button):
-            duplicate_buttons.addWidget(button)
-        duplicate_buttons.addStretch(1)
-        duplicates_layout.addLayout(duplicate_buttons)
-        self.duplicates_index = self.add_page(duplicates_page, "Albums en double", "Doublons")
-        self.duplicate_groups = []
-        self.duplicate_table.selectionModel().selectionChanged.connect(self.show_duplicate_group)
         self.organizer_details = make_browser()
         self.organizer_details.setHtml("<h2>Rangement assisté</h2><p>Prévisualisez d'abord la destination d'un album "
             "avec le menu Rangement. Le déplacement demande ensuite votre confirmation et crée un journal restaurable. "
@@ -187,8 +159,7 @@ class AdvancedWindow(MainWindow):
         tags_layout.addLayout(tag_buttons)
         self.tags_index = self.add_page(tags_page, "Journal des tags", "Organisation")
         self.tag_batch_table.selectionModel().selectionChanged.connect(self.show_tag_batch)
-        self.buttons += [self.edit_tags_button, self.undo_tags_button, self.keep_button, self.quarantine_button,
-                         self.restore_quarantine_button]
+        self.buttons += [self.edit_tags_button, self.undo_tags_button]
         delegate = RelativePathDelegate(self, self)
         self.extended_path_delegate = delegate
         self.quality_table.setItemDelegateForColumn(2, delegate)
@@ -216,9 +187,6 @@ class AdvancedWindow(MainWindow):
         self._action(review, "Actualiser les décisions enregistrées", self.refresh_decisions)
         self._action(review, "Afficher les constats prioritaires", lambda: self.tabs.setCurrentIndex(self.quality_index))
         self._action(review, "Estimer l’espace des copies exactes", self.estimate_storage)
-        review.addSeparator()
-        self._action(review, "Albums en double…", lambda: self.tabs.setCurrentIndex(self.duplicates_index))
-        self._action(review, "Mettre en quarantaine les copies en trop sélectionnées…", self.quarantine_duplicates)
         session = self.add_menu("Session")
         self._action(session, "Exporter la session JSON…", self.export_review_session)
         self._action(session, "Importer une session JSON…", self.import_review_session)
@@ -242,7 +210,6 @@ class AdvancedWindow(MainWindow):
             ("Alias de l’artiste…", self.resolve_alias, len(selected) == 1),
             ("Prévisualiser le rangement…", self.preview_organization, len(selected) == 1),
             ("Modifier les tags…", self.edit_tags, len(selected) == 1),
-            ("Voir les albums en double", lambda: self.tabs.setCurrentIndex(self.duplicates_index), True),
         ]
         return actions
 
@@ -291,7 +258,6 @@ class AdvancedWindow(MainWindow):
             self.apply_action.setEnabled(False)
             self.jellyfin_model.removeRows(0, self.jellyfin_model.rowCount())
             self.set_page_count(self.jellyfin_index, None)
-            self.refresh_duplicates()
             self.refresh_reviews()
 
     def refresh_reviews(self):
@@ -699,166 +665,6 @@ class AdvancedWindow(MainWindow):
                 return journal.undo(batch_id, cancel=cancel, progress=progress)
         self.run_task("Rétablissement des tags d’origine…", operation,
                       lambda result: self._tags_written(result, "rétablis"), cancellable=True)
-
-    # Albums en double : groupes, copie à garder, quarantaine journalisée.
-    def refresh_duplicates(self):
-        from .duplicates import duplicate_groups
-        from .gui import STATUS_COLORS
-        from .comparison import IDENTICAL, MATCHING
-        from PySide6.QtGui import QColor
-        self.duplicate_groups = [] if self.historical else duplicate_groups(self.matches)
-        colors = {"Copie exacte": STATUS_COLORS[IDENTICAL], "Même album probable": STATUS_COLORS[MATCHING],
-                  "À vérifier": "#9fb3c1"}
-        self.duplicate_model.removeRows(0, self.duplicate_model.rowCount())
-        for index, group in enumerate(self.duplicate_groups):
-            self._duplicate_row(index, group)
-            self.duplicate_model.item(index, 0).setForeground(QColor(colors.get(group.confidence, "#e3ebf1")))
-        self.duplicate_table.resizeColumnsToContents()
-        for column, width in ((1, 260), (3, 320), (5, 360)):
-            self.duplicate_table.setColumnWidth(column, min(self.duplicate_table.columnWidth(column), width))
-        self.set_page_count(self.duplicates_index, len(self.duplicate_groups))
-        self.duplicate_details.setHtml("<h2>Albums en double</h2><p>" + (
-            "Sélectionnez un groupe pour comparer ses copies." if self.duplicate_groups else
-            "Aucun album en double détecté dans cet inventaire.") + "</p>")
-
-
-    def _duplicate_row(self, index, group):
-        from .gui import byte_size
-        kept = Path(group.albums[group.keep].path).name if group.keep is not None else "À choisir"
-        values = [group.confidence, group.title, len(group.albums), kept,
-                  byte_size(group.extra_bytes) if group.keep is not None else "—", group.reasons[-1] if group.reasons else ""]
-        if self.duplicate_model.rowCount() > index:
-            for column, value in enumerate(values):
-                self.duplicate_model.item(index, column).setText(str(value))
-                self.duplicate_model.item(index, column).setToolTip(str(value))
-        else:
-            append_row(self.duplicate_model, values, index)
-
-    def _selected_groups(self):
-        rows = self.duplicate_table.selectionModel().selectedRows()
-        return sorted({self.duplicate_proxy.index(row.row(), 0).data(Qt.ItemDataRole.UserRole) for row in rows})
-
-    def show_duplicate_group(self, *_):
-        selected = self._selected_groups()
-        if not selected:
-            return
-        group = self.duplicate_groups[selected[0]]
-        lines = [f"<h2>{escaped(group.title)} — {escaped(group.confidence)}</h2><p>"
-                 + "<br>".join(escaped(reason) for reason in group.reasons) + "</p>"]
-        for index, (album, score) in enumerate(zip(group.albums, group.scores)):
-            label = "À garder" if index == group.keep else ("Quarantaine" if group.keep is not None else "À choisir")
-            size = sum(track.size for track in album.tracks)
-            lines.append(f"<h3>{escaped(label)} — {escaped(Path(album.path).name)}</h3><p>{escaped(album.path)}<br>"
-                         f"{len(album.tracks)} pistes • {size / 2**20:.1f} Mio<br>"
-                         f"<span style='color:#8fd1a8'>{escaped(', '.join(score.strengths))}</span><br>"
-                         f"<span style='color:#ff9e80'>{escaped(', '.join(score.weaknesses))}</span></p>")
-        self.duplicate_details.setHtml("".join(lines))
-
-    def choose_kept_copy(self, group_index=None, keep=None):
-        selected = self._selected_groups()
-        if group_index is None:
-            if len(selected) != 1:
-                self.tabs.setCurrentIndex(self.duplicates_index)
-                self.state.setText("Sélectionnez un seul groupe d’albums en double.")
-                return
-            group_index = selected[0]
-        group = self.duplicate_groups[group_index]
-        if keep is None:
-            labels = [f"{Path(album.path).name} — {len(album.tracks)} pistes — {', '.join(score.strengths) or 'aucun atout'}"
-                      for album, score in zip(group.albums, group.scores)]
-            label, accepted = QInputDialog.getItem(self, "Copie à garder", "Garder cette copie ; les autres iront en "
-                                                   "quarantaine", labels, group.keep or 0, False)
-            if not accepted:
-                return
-            keep = labels.index(label)
-        group.keep = keep
-        group.reasons = [reason for reason in group.reasons if not reason.startswith(("Copie recommandée", "Copies de qualité",
-                                                                                     "Correspondance incertaine"))]
-        group.reasons.insert(0, "Copie à garder choisie manuellement.")
-        self._duplicate_row(group_index, group)
-        self.show_duplicate_group()
-
-    def quarantine_duplicates(self, confirm=None, allow_hardlinks=None):
-        if not self._fresh() or self.task is not None:
-            return
-        selected = self._selected_groups()
-        if not selected:
-            self.tabs.setCurrentIndex(self.duplicates_index)
-            self.state.setText("Sélectionnez un ou plusieurs groupes d’albums en double (Ctrl+clic).")
-            return
-        undecided = [self.duplicate_groups[index].title for index in selected if self.duplicate_groups[index].keep is None]
-        if undecided:
-            self.state.setText("Choisissez d’abord la copie à garder pour : " + ", ".join(undecided))
-            return
-        albums = [album for index in selected for album in self.duplicate_groups[index].to_remove()]
-        root = Path(self.root)
-        from .organizer import plan_quarantine
-        def operation(cancel, progress):
-            plans = []
-            for position, album in enumerate(albums, 1):
-                plans.append(plan_quarantine(album, root, cancel=cancel))
-                progress(position, len(albums), album.path)
-            return plans
-        self.run_task("Vérification des copies à mettre en quarantaine…", operation,
-                      lambda plans: self._confirm_quarantine(plans, confirm, allow_hardlinks))
-
-    def _confirm_quarantine(self, plans, confirm, allow_hardlinks):
-        ready = [plan for plan in plans if not plan.blockers]
-        blocked = [plan for plan in plans if plan.blockers]
-        if blocked:
-            self.duplicate_details.setHtml("<h2>Copies non déplaçables</h2>" + "".join(
-                f"<p><b>{escaped(plan.source)}</b><br>{escaped(' ; '.join(plan.blockers))}</p>" for plan in blocked))
-        if not ready:
-            self.show_error("Aucune copie ne peut être mise en quarantaine : voir le détail des blocages.")
-            return
-        hardlinked = sum(plan.hardlinked_files for plan in ready)
-        size = sum(entry.size for plan in ready for entry in plan.files if entry.kind == "file")
-        if confirm is None:
-            confirm = QMessageBox.question(self, "Mettre en quarantaine",
-                f"Déplacer {len(ready)} dossier(s) ({size / 2**20:.1f} Mio) vers :\n{Path(self.root) / QUARANTINE_DIR}\n\n"
-                + (f"{len(blocked)} autre(s) copie(s) bloquée(s), détail dans la page.\n\n" if blocked else "")
-                + "Si qBittorrent partage encore ces fichiers, le partage sera interrompu.\n"
-                "Un journal par dossier permet de tout restaurer. Rien n’est effacé : videz vous-même la "
-                "quarantaine quand vous êtes sûr.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
-        if not confirm:
-            return
-        if hardlinked and allow_hardlinks is None:
-            allow_hardlinks = QMessageBox.question(self, "Liens physiques",
-                f"{hardlinked} fichier(s) ont des liens physiques (Lidarr, qBittorrent…). Les déplacer ne libère pas "
-                "leur espace tant que l’autre lien existe. Continuer ?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
-            if not allow_hardlinks:
-                return
-        from .organizer import OrganizeError, apply_plan
-        journal_dir = self.cache_dir / "journals"
-        def operation(cancel, progress):
-            done, failed = [], []
-            for position, plan in enumerate(ready, 1):
-                try:
-                    done.append(apply_plan(plan, journal_dir, confirmed=True, allow_hardlinks=bool(allow_hardlinks)))
-                except (OSError, OrganizeError) as exc:
-                    failed.append((plan.source, str(exc)))
-                progress(position, len(ready), plan.source)
-            return done, failed
-        def finished(result):
-            done, failed = result
-            message = f"{len(done)} copie(s) mise(s) en quarantaine dans {QUARANTINE_DIR}."
-            if failed:
-                self.show_error(message + " Échecs : " + " | ".join(f"{Path(path).name} : {error}" for path, error in failed))
-            else:
-                self.state.setText(message + " Actualisation de l’inventaire…")
-            if done:
-                self.requires_rescan = True
-                self._after_task = self.start_scan
-        # Appelé depuis le résultat de la vérification : la tâche suivante démarre après sa fin.
-        start = lambda: self.run_task("Mise en quarantaine des copies en trop…", operation, finished, cancellable=False)
-        if self.task is not None:
-            self._after_task = start
-        else:
-            start()
 
     def preview_organization(self, destination_root=None):
         if not self._fresh() or self.task is not None:
