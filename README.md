@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.6** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Deux opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
+La version **0.7** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.6.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.6.0) ajoute l'éditeur de tags, journalisé et annulable ; la v0.5.0 a réorganisé l'interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.7.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.7.0) détecte les albums en double sous des noms de dossiers différents et met les copies en trop en quarantaine restaurable ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.6.0-1_amd64.deb
+sudo apt install ./musicscope_0.7.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.6.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.7.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -96,6 +96,30 @@ La barre latérale regroupe les pages en quatre sections : **Bibliothèque** (in
 | Ctrl+1 à Ctrl+9 | Aller à une page de la barre latérale |
 | Échap | Annuler l'opération en cours |
 | F1 | À propos de MusicScope |
+
+### Albums en double
+
+La page **Doublons → Albums en double** regroupe les copies d'un même album, y compris sous des conventions de nommage différentes. Les noms de dossiers suivants sont reconnus, l'artiste étant pris dans le dossier parent quand le nom n'en contient pas :
+
+| Nom du dossier | Artiste, album, année |
+| --- | --- |
+| `2014 - Artiste - Album` | Artiste, Album, 2014 |
+| `Artiste - 2014 - Album` | Artiste, Album, 2014 |
+| `Album (2014)` ou `Album [2014]` | dossier parent, Album, 2014 |
+| `Artiste - Album (2014)` | Artiste (s'il correspond au dossier parent), Album, 2014 |
+| `2014 - Album` ou `Album - 2014` | dossier parent, Album, 2014 |
+
+Le nom du dossier ne fait que proposer des candidats ; les pistes sont toujours comparées. Chaque groupe a un niveau de confiance :
+
+- **Copie exacte** : fichiers identiques octet pour octet ou mêmes fichiers physiques.
+- **Même album probable** : mêmes pistes (titres, numéros, durées), éventuellement dans un autre format.
+- **À vérifier** : comparaison non concluante, mais même album et même année d'après les noms de dossiers (par exemple une copie sans tags). Rien n'est présélectionné.
+
+MusicScope recommande la copie à garder : album complet, sans perte (FLAC/ALAC avant Opus, Vorbis, AAC puis MP3), plus de pistes, tags plus complets, identifiant MusicBrainz, moins de constats. Quand deux copies sont équivalentes, ou pour un groupe « À vérifier », **Choisir la copie à garder** est obligatoire. Le détail affiche les atouts et faiblesses de chaque copie.
+
+**Mettre en quarantaine les copies en trop** (sélectionnez un ou plusieurs groupes) déplace les autres copies dans `_MusicScope_doublons`, à la racine analysée, en conservant leur chemin relatif. Le déplacement suit les règles du rangement : même volume, aucun remplacement, inventaire à jour exigé, journal par dossier. **Restaurer depuis la quarantaine** remet un dossier à sa place. Le scan ignore ce dossier. Rien n'est supprimé : videz vous-même `_MusicScope_doublons` quand vous êtes sûr.
+
+Attention : si qBittorrent partage encore ces fichiers, les déplacer interrompt le partage. Des fichiers liés physiquement (Lidarr, qBittorrent) ne libèrent pas d'espace tant que l'autre lien existe ; MusicScope le signale quand il peut le vérifier (pas sur un partage réseau).
 
 ### Éditeur de tags
 

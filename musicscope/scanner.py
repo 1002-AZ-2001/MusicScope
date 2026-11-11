@@ -18,6 +18,8 @@ from .metadata import AUDIO_EXTENSIONS, read_track
 from .models import Album, Inventory, Track
 from .normalization import name_key
 
+QUARANTINE_DIR = "_MusicScope_doublons"  # même valeur que organizer.QUARANTINE_DIR
+
 DISC_FOLDER = re.compile(r"^(?:cd|disc|disk|disque)[\s._-]*(\d+)$", re.I)
 # Sur un partage réseau, les accès (stat, lecture des tags) attendent surtout
 # la latence : plusieurs requêtes en vol la masquent. Sur un disque local, le
@@ -71,7 +73,7 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
                 for entry in entries:
                     check_cancel(cancel)
                     path = Path(entry.path)
-                    if is_link(path):
+                    if is_link(path) or (directory == root and entry.name == QUARANTINE_DIR):
                         continue
                     try:
                         info = entry.stat(follow_symlinks=False)

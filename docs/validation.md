@@ -1,6 +1,14 @@
-# Validation — MusicScope 0.6.0
+# Validation — MusicScope 0.7.0
 
 Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.7.0 — albums en double
+
+Les tests couvrent onze conventions de nommage (dont les noms de la capture fournie : « 2014 - NxxxxxS - Fujita Scale », « Fujita Scale (2014) », « La Flamme Rouge (Original Motion Picture Soundtrack) (2021) », « Selected Beat Work 2324 (2024) ») et les dossiers de disque. Sur de vrais fichiers FLAC et MP3 : copie sans tags retrouvée par son nom de dossier, préférence pour la copie sans perte, copies équivalentes en attente d'un choix, regroupement transitif et confiance du lien le plus faible, paires « À vérifier » limitées au même album et à la même année. La quarantaine est testée de bout en bout : déplacement, scan qui l'ignore, restauration par le journal, suffixe en cas de collision, refus hors racine, sur inventaire ancien ou déjà en quarantaine. Dans l'interface : choix manuel, refus sans copie choisie, annulation, quarantaine puis actualisation automatique.
+
+**348 tests** passent sous Python 3.12 et 3.13. La page a été contrôlée par capture sur une bibliothèque reproduisant les noms de la capture fournie.
+
+Non essayé sur votre NAS : vérifier d'abord sur quelques albums, et savoir que les liens physiques ne sont pas détectables sur un partage réseau.
 
 ## Version 0.6.0 — éditeur de tags
 
