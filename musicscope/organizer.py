@@ -25,6 +25,8 @@ from .models import Album
 
 JOURNAL_VERSION = 1
 MAX_ENTRIES = 100_000
+# Dossier de quarantaine des doublons, à la racine analysée ; le scan l'ignore.
+QUARANTINE_DIR = "_MusicScope_doublons"
 
 
 class OrganizeError(RuntimeError):
@@ -197,6 +199,42 @@ def plan_album(album: Album, destination_root: str | Path, cancel=None) -> MoveP
         plan.warnings.append("Certains caractères ont été adaptés pour produire des noms compatibles Windows/Linux.")
     destination = root / artist_name / album_name
     plan.destination = str(destination)
+    _validate_move(album, source, destination, plan, cancel)
+    return plan
+
+
+def plan_quarantine(album: Album, library_root: str | Path, cancel=None) -> MovePlan:
+    """Déplacement d'un album en double vers `<racine>/_MusicScope_doublons/<chemin relatif>`.
+
+    Mêmes garanties que le rangement (même volume, aucun remplacement, journal
+    restaurable), sans exigence sur les tags : la copie est mise de côté, pas rangée.
+    """
+    source = _absolute(album.path)
+    root = _absolute(library_root)
+    plan = MovePlan(str(source), "")
+    if not album.complete or not album.tracks:
+        plan.blockers.append("L'inventaire de l'album doit être complet et non vide.")
+    if any("regroupement ambigu" in issue.casefold() for issue in album.issues):
+        plan.blockers.append("Le regroupement de l'album est ambigu.")
+    if source == root or not source.is_relative_to(root):
+        plan.blockers.append("L'album doit être situé sous la racine analysée.")
+        return plan
+    relative = source.relative_to(root)
+    if relative.parts and relative.parts[0] == QUARANTINE_DIR:
+        plan.blockers.append("Cet album est déjà en quarantaine.")
+        return plan
+    destination = root / QUARANTINE_DIR / relative
+    suffix = 2
+    while _collision(destination):
+        destination = root / QUARANTINE_DIR / relative.parent / f"{relative.name} ({suffix})"
+        suffix += 1
+    plan.destination = str(destination)
+    _validate_move(album, source, destination, plan, cancel)
+    return plan
+
+
+def _validate_move(album: Album, source: Path, destination: Path, plan: MovePlan, cancel=None) -> None:
+    """Contrôles communs : liens, volume, collision, contenu et inventaire à jour."""
     try:
         _check_ancestors(source)
         nearest = _check_ancestors(destination.parent, allow_missing=True)
@@ -238,7 +276,6 @@ def plan_album(album: Album, destination_root: str | Path, cancel=None) -> MoveP
                 raise OrganizeError(f"Inventaire ancien : analyser à nouveau avant de déplacer {path.name}.")
     except (OSError, OrganizeError) as exc:
         plan.blockers.append(str(exc))
-    return plan
 
 
 def _fsync_directory(path: Path):
