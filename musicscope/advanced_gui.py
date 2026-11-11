@@ -5,15 +5,15 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QTimer, Qt, QUrl, Slot
+from PySide6.QtCore import QSize, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QImageReader, QPixmap
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
-    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .gui import MainWindow, append_row, escaped, make_table
+from .gui import MainWindow, RelativePathDelegate, append_row, escaped, make_browser, make_table
 
 
 def byte_label(value) -> str:
@@ -51,6 +51,8 @@ class JellyfinDialog(QDialog):
         layout.addWidget(add_button)
         layout.addWidget(QLabel("Les chemins sans correspondance restent visibles. Aucun changement du catalogue n'est envoyé."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Comparer")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Annuler")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -90,32 +92,27 @@ class AdvancedWindow(MainWindow):
         self.setWindowTitle("MusicScope — Inventaire et revue de votre médiathèque")
         self._build_extended_tabs()
         self._build_menus()
-        self.setStyleSheet(self.styleSheet() + """
-            QDialog {background:#17212b;color:#e9eff5}
-            QMenuBar,QMenu {background:#243744;color:#e9eff5}
-            QMenuBar::item:selected,QMenu::item:selected {background:#147d88}
-        """)
         self.extensions_ready = True
         self.refresh_reviews()
+        self.refresh_tag_journal()
 
     def _build_extended_tabs(self):
         self.jellyfin_table, self.jellyfin_model, self.jellyfin_proxy = make_table(
             ["Statut", "Chemin serveur", "Chemin local", "Titre", "Identifiant catalogue", "Motif"])
-        self.jellyfin_index = self.tabs.addTab(self.jellyfin_table, "Jellyfin")
+        self.jellyfin_index = self.add_page(self.jellyfin_table, "Jellyfin", "Services")
         sources_page = QWidget()
         sources_layout = QVBoxLayout(sources_page)
-        self.sources_details = QTextBrowser()
-        self.sources_details.setOpenExternalLinks(True)
-        self.sources_details.setHtml("<h2>Enregistrements, alias et pochettes</h2><p>Utilisez le menu Sources. "
+        self.sources_details = make_browser(external_links=True)
+        self.sources_details.setHtml("<h2>Enregistrements, alias et pochettes</h2><p>Utilisez le menu Services. "
                                     "Chaque consultation distante est déclenchée à votre demande ; une empreinte "
                                     "d'enregistrement ne détermine pas une édition.</p>")
         sources_layout.addWidget(self.sources_details, 1)
         self.cover_layout = QHBoxLayout()
         sources_layout.addLayout(self.cover_layout)
-        self.sources_index = self.tabs.addTab(sources_page, "Sources")
+        self.sources_index = self.add_page(sources_page, "Sources", "Services")
         quality_page = QWidget()
         quality_layout = QVBoxLayout(quality_page)
-        self.storage_label = QLabel("Estimation de l’espace : menu Revue → Estimer l’espace.")
+        self.storage_label = QLabel("Estimation de l’espace : menu Revue → Estimer l’espace des copies exactes.")
         self.storage_label.setWordWrap(True)
         quality_layout.addWidget(self.storage_label)
         self.quality_filter = QComboBox()
@@ -126,19 +123,50 @@ class AdvancedWindow(MainWindow):
         self.quality_proxy.setFilterKeyColumn(1)
         self.quality_filter.currentIndexChanged.connect(self.filter_quality)
         quality_layout.addWidget(self.quality_table, 1)
-        self.quality_index = self.tabs.addTab(quality_page, "Qualité")
+        self.quality_index = self.add_page(quality_page, "Qualité", "Bibliothèque")
         self.decision_table, self.decision_model, self.decision_proxy = make_table(
             ["Décision", "Album A", "Album B", "Note", "Date", "Validité"])
-        self.decisions_index = self.tabs.addTab(self.decision_table, "Décisions")
-        self.organizer_details = QTextBrowser()
+        self.decisions_index = self.add_page(self.decision_table, "Décisions", "Doublons")
+        self.organizer_details = make_browser()
         self.organizer_details.setHtml("<h2>Rangement assisté</h2><p>Prévisualisez d'abord la destination d'un album "
             "avec le menu Rangement. Le déplacement demande ensuite votre confirmation et crée un journal restaurable. "
             "Les fichiers audio ne sont ni supprimés ni retagués.</p>")
-        self.organizer_index = self.tabs.addTab(self.organizer_details, "Rangement")
-        self.session_details = QTextBrowser()
+        self.organizer_index = self.add_page(self.organizer_details, "Rangement", "Organisation")
+        self.session_details = make_browser()
         self.session_details.setPlainText("Le menu Session exporte ou importe un rapport JSON versionné. "
                                           "Une session importée contient des preuves historiques, à actualiser par un scan.")
-        self.session_index = self.tabs.addTab(self.session_details, "Session")
+        self.session_index = self.add_page(self.session_details, "Session", "Organisation")
+        tags_page = QWidget()
+        tags_layout = QVBoxLayout(tags_page)
+        tags_intro = QLabel("Chaque écriture de tags est journalisée avec les valeurs d’origine. Sélectionnez une "
+                            "modification pour voir son détail ou l’annuler.")
+        tags_intro.setWordWrap(True)
+        tags_layout.addWidget(tags_intro)
+        self.tag_batch_table, self.tag_batch_model, self.tag_batch_proxy = make_table(
+            ["N°", "Date", "Album", "Fichiers écrits", "État"])
+        self.tag_batch_table.setSelectionMode(self.tag_batch_table.SelectionMode.SingleSelection)
+        tags_layout.addWidget(self.tag_batch_table, 2)
+        self.tag_details = make_browser()
+        tags_layout.addWidget(self.tag_details, 1)
+        tag_buttons = QHBoxLayout()
+        self.edit_tags_button = QPushButton("Modifier les tags de l’album…")
+        self.edit_tags_button.clicked.connect(lambda: self.edit_tags())
+        self.undo_tags_button = QPushButton("Annuler la modification sélectionnée…")
+        self.undo_tags_button.clicked.connect(lambda: self.undo_tags())
+        tag_buttons.addWidget(self.edit_tags_button)
+        tag_buttons.addWidget(self.undo_tags_button)
+        tag_buttons.addStretch(1)
+        tags_layout.addLayout(tag_buttons)
+        self.tags_index = self.add_page(tags_page, "Journal des tags", "Organisation")
+        self.tag_batch_table.selectionModel().selectionChanged.connect(self.show_tag_batch)
+        self.buttons += [self.edit_tags_button, self.undo_tags_button]
+        delegate = RelativePathDelegate(self, self)
+        self.extended_path_delegate = delegate
+        self.quality_table.setItemDelegateForColumn(2, delegate)
+        self.decision_table.setItemDelegateForColumn(1, delegate)
+        self.decision_table.setItemDelegateForColumn(2, delegate)
+        self.jellyfin_table.setItemDelegateForColumn(2, delegate)
+        self.tag_batch_table.setItemDelegateForColumn(2, delegate)
 
     def _action(self, menu, title, callback):
         action = QAction(title, self)
@@ -148,9 +176,9 @@ class AdvancedWindow(MainWindow):
         return action
 
     def _build_menus(self):
-        jellyfin = self.add_menu("Jellyfin")
-        self._action(jellyfin, "Configurer et comparer le catalogue…", self.start_jellyfin)
-        sources = self.add_menu("Sources")
+        sources = self.add_menu("Services")
+        self._action(sources, "Diagnostic Jellyfin : configurer et comparer le catalogue…", self.start_jellyfin)
+        sources.addSeparator()
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
         self._action(sources, "Rechercher les alias de l’artiste…", self.resolve_alias)
@@ -162,11 +190,28 @@ class AdvancedWindow(MainWindow):
         session = self.add_menu("Session")
         self._action(session, "Exporter la session JSON…", self.export_review_session)
         self._action(session, "Importer une session JSON…", self.import_review_session)
+        tags = self.add_menu("Tags")
+        edit_action = self._action(tags, "Modifier les tags de l’album sélectionné…", self.edit_tags)
+        edit_action.setShortcut("Ctrl+T")
+        self._action(tags, "Annuler la modification sélectionnée…", self.undo_tags)
+        self._action(tags, "Afficher le journal des tags", lambda: self.tabs.setCurrentIndex(self.tags_index))
         organize = self.add_menu("Rangement")
         self._action(organize, "Prévisualiser Artiste / Album (Année)…", self.preview_organization)
         self.apply_action = self._action(organize, "Appliquer le déplacement prévisualisé…", self.apply_organization)
         self._action(organize, "Restaurer un déplacement journalisé…", self.restore_organization)
         self.apply_action.setEnabled(False)
+
+    def album_actions(self, selected):
+        actions = super().album_actions(selected)
+        actions += [
+            ("Enregistrer une décision…", self.record_decision, len(selected) == 2),
+            ("Consulter les pochettes…", self.fetch_artworks, len(selected) in (1, 2)),
+            ("Empreinte audio d’une piste…", self.start_recognition, len(selected) == 1),
+            ("Alias de l’artiste…", self.resolve_alias, len(selected) == 1),
+            ("Prévisualiser le rangement…", self.preview_organization, len(selected) == 1),
+            ("Modifier les tags…", self.edit_tags, len(selected) == 1),
+        ]
+        return actions
 
     def run_task(self, label, operation, on_result, cancellable=True):
         if self.task is not None:
@@ -212,6 +257,7 @@ class AdvancedWindow(MainWindow):
         if self.extensions_ready:
             self.apply_action.setEnabled(False)
             self.jellyfin_model.removeRows(0, self.jellyfin_model.rowCount())
+            self.set_page_count(self.jellyfin_index, None)
             self.refresh_reviews()
 
     def refresh_reviews(self):
@@ -220,6 +266,7 @@ class AdvancedWindow(MainWindow):
         findings = quality_findings(self.inventory)
         for finding in findings:
             append_row(self.quality_model, [finding.priority, finding.category, finding.album_path, finding.message])
+        self.set_page_count(self.quality_index, len(findings))
         current = self.quality_filter.currentText()
         self.quality_filter.blockSignals(True)
         self.quality_filter.clear()
@@ -259,6 +306,7 @@ class AdvancedWindow(MainWindow):
         self.decision_model.removeRows(0, self.decision_model.rowCount())
         for decision in decisions:
             self._decision_row(decision)
+        self.set_page_count(self.decisions_index, len(decisions))
 
     def _decision_row(self, decision, historical=False):
         data = asdict(decision) if hasattr(decision, "__dataclass_fields__") else decision
@@ -357,6 +405,7 @@ class AdvancedWindow(MainWindow):
             for finding in result.findings:
                 append_row(self.jellyfin_model, [finding.status, finding.server_path, finding.local_path,
                     finding.title, finding.item_id, finding.reason])
+            self.set_page_count(self.jellyfin_index, len(result.findings))
             self.tabs.setCurrentIndex(self.jellyfin_index)
             self.state.setText(("Catalogue examiné. " if result.complete else "Diagnostic incomplet. ") + " | ".join(result.reasons))
         self.run_task("Consultation du catalogue Jellyfin…", operation, done)
@@ -500,6 +549,122 @@ class AdvancedWindow(MainWindow):
             self.sources_details.setHtml("".join(text))
             self.tabs.setCurrentIndex(self.sources_index)
         self.run_task("Consultation des pochettes Cover Art Archive…", operation, done, cancellable=False)
+
+    # Éditeur de tags : saisie, aperçu, écriture journalisée puis actualisation par scan.
+    def edit_tags(self, dialog_values=None, confirm=None):
+        """`dialog_values` (valeurs d'album, valeurs de pistes) et `confirm` servent aux tests."""
+        if not self._fresh() or self.task is not None:
+            return
+        selected = self._selected(1)
+        if not selected:
+            return
+        album = selected[0]
+        from .tag_editor_gui import TagEditorDialog, TagPreviewDialog
+        from .tagwriter import TagJournal, plan_album_edits
+        if dialog_values is None:
+            verification = self.verifications.get(album.path)
+            dialog = TagEditorDialog(album, getattr(verification, "proposals", None), self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            edits = dialog.edits()
+        else:
+            edits = plan_album_edits(album, *dialog_values)
+        if not edits:
+            self.state.setText("Aucune différence avec les tags actuels : rien à écrire.")
+            return
+        if confirm is None:
+            if TagPreviewDialog(edits, self).exec() != QDialog.DialogCode.Accepted:
+                return
+        elif not confirm:
+            return
+        def operation(cancel, progress):
+            with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
+                return journal.apply(edits, album.path, cancel=cancel, progress=progress)
+        def done(result):
+            self._tags_written(result, "écrits")
+        self.run_task(f"Écriture des tags de {len(edits)} fichier(s), avec vérification par relecture…",
+                      operation, done, cancellable=True)
+
+    def _tags_written(self, result, verb):
+        self.refresh_tag_journal(select=result.batch_id)
+        self.tabs.setCurrentIndex(self.tags_index)
+        message = f"Tags {verb} pour {len(result.written)} fichier(s)."
+        if result.failed:
+            message += f" {len(result.failed)} échec(s) : " + " | ".join(
+                f"{Path(path).name} : {error}" for path, error in result.failed)
+            self.show_error(message)
+        else:
+            self.state.setText(message + " Actualisation de l’inventaire…")
+        if result.written:
+            # Seuls les fichiers modifiés sont relus : l'actualisation est rapide.
+            self.requires_rescan = True
+            self._after_task = self.start_scan
+
+    def refresh_tag_journal(self, select=None):
+        from .tagwriter import TagJournal
+        self.tag_batch_model.removeRows(0, self.tag_batch_model.rowCount())
+        with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
+            batches = journal.batches()
+        from .gui import format_scan_date
+        for batch in batches:
+            state = ("Annulée le " + format_scan_date(batch.undone_at)) if batch.undone_at else (
+                "Écrite" if batch.written == batch.files else f"Partielle ({batch.written}/{batch.files})")
+            append_row(self.tag_batch_model, [batch.id, format_scan_date(batch.created_at), batch.album_path,
+                                              f"{batch.written}/{batch.files}", state], batch.id)
+        self.set_page_count(self.tags_index, len(batches))
+        if select is not None:
+            for row in range(self.tag_batch_proxy.rowCount()):
+                if self.tag_batch_proxy.index(row, 0).data(Qt.ItemDataRole.UserRole) == select:
+                    self.tag_batch_table.selectRow(row)
+                    break
+
+    def _selected_batch(self):
+        rows = self.tag_batch_table.selectionModel().selectedRows()
+        if not rows:
+            return None
+        return self.tag_batch_proxy.index(rows[0].row(), 0).data(Qt.ItemDataRole.UserRole)
+
+    def show_tag_batch(self, *_):
+        batch_id = self._selected_batch()
+        if batch_id is None:
+            return
+        from .tagwriter import FIELD_LABELS, TagJournal, join_values
+        with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
+            entries = journal.entries(batch_id)
+        states = {"written": "écrit", "pending": "interrompu", "failed": "échec",
+                  "failed_restored": "échec, valeurs d’origine rétablies", "undone": "annulé"}
+        lines = [f"<h2>Modification n° {batch_id}</h2><table border='1' cellspacing='0' cellpadding='4'>"
+                 "<tr><th>Fichier</th><th>État</th><th>Champ</th><th>Avant</th><th>Après</th></tr>"]
+        for path, old, new, status in entries:
+            for key, values in new.items():
+                lines.append("<tr>" + "".join(f"<td>{escaped(value)}</td>" for value in (
+                    Path(path).name, states.get(status, status), FIELD_LABELS.get(key, key),
+                    join_values(old.get(key, [])) or "—", join_values(values) or "(supprimé)")) + "</tr>")
+        lines.append("</table>")
+        self.tag_details.setHtml("".join(lines))
+
+    def undo_tags(self, batch_id=None, confirm=None):
+        if self.task is not None:
+            return
+        batch_id = batch_id if batch_id is not None else self._selected_batch()
+        if batch_id is None:
+            self.tabs.setCurrentIndex(self.tags_index)
+            self.state.setText("Sélectionnez une modification dans le journal des tags.")
+            return
+        if confirm is None:
+            confirm = QMessageBox.question(self, "Annuler une modification de tags",
+                f"Rétablir les valeurs d’origine de la modification n° {batch_id} ?\n\n"
+                "Les fichiers dont les tags ont changé depuis l’écriture ne seront pas touchés.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+        if not confirm:
+            return
+        from .tagwriter import TagJournal
+        def operation(cancel, progress):
+            with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
+                return journal.undo(batch_id, cancel=cancel, progress=progress)
+        self.run_task("Rétablissement des tags d’origine…", operation,
+                      lambda result: self._tags_written(result, "rétablis"), cancellable=True)
 
     def preview_organization(self, destination_root=None):
         if not self._fresh() or self.task is not None:

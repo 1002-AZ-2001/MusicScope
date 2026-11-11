@@ -1,6 +1,20 @@
-# Validation — MusicScope 0.4.0
+# Validation — MusicScope 0.6.0
 
-Validation du 9 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.6.0 — éditeur de tags
+
+L'écriture est testée sur de vrais fichiers des cinq formats : FLAC et MP3 du corpus de démonstration, M4A (AAC), Ogg Vorbis et Opus générés une fois avec ffmpeg et versionnés dans `tests/data` (moins de 5 Ko chacun). Pour chaque format, les huit champs sont écrits puis relus par le lecteur de MusicScope, les autres tags sont conservés, et l'annulation rétablit exactement les tags d'origine. D'autres tests vérifient la conservation d'ID3v2.3, le refus d'un fichier modifié depuis le scan (fichier intact, rien de journalisé), le rétablissement après une relecture différente, le refus d'annuler des tags changés depuis, la suppression d'un champ et son rétablissement, l'arrêt sur annulation entre deux fichiers et la limitation des propositions MusicBrainz aux champs modifiables. Côté interface : écriture, actualisation automatique de l'inventaire, journal, annulation, valeurs mixtes non modifiées, aperçu et refus sur un inventaire historique.
+
+**326 tests** passent sous Python 3.12 et 3.13. Le dialogue d'édition, l'aperçu et le journal ont été contrôlés par captures après une écriture réelle sur les cinq formats.
+
+Non essayé : votre NAS (une écriture réseau interrompue reste un risque), et les fichiers aux tags exotiques (plusieurs balises ID3, APEv2 dans un MP3).
+
+## Version 0.5.0 — interface réorganisée
+
+Les tests d'interface vérifient la barre latérale (sections, onze pages, en-têtes non sélectionnables, synchronisation avec les pages), les compteurs, les menus Fichier et Affichage avec leurs raccourcis, l'affichage relatif des chemins sans modification des données, les actions du clic droit selon la sélection, la barre d'état, la couleur des statuts et la mémorisation de la géométrie avec la racine. **308 tests** passent sous Python 3.12 et 3.13 (Qt `offscreen`). Les écrans Inventaire, Rapprochements et Qualité ont été contrôlés par captures, avec le style Fusion et la palette sombre de l'application.
+
+La disposition n'a pas été essayée sur votre bureau : l'échelle d'affichage et le thème du système peuvent modifier légèrement le rendu.
 
 ## Version 0.4.0 — lecture parallèle, cache entretenu et aide
 
