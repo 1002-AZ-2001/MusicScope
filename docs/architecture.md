@@ -87,6 +87,10 @@ Les critères sont combinés par « ET » et appliqués du moins coûteux au plu
 
 La quarantaine d'un fichier vérifie qu'il est inchangé depuis la recherche (taille, date, périphérique, inode), puis le renomme sans remplacement (`renameat2(RENAME_NOREPLACE)` sous Linux) vers `<racine>/_MusicScope_doublons/<chemin relatif>`. Le journal (version 2, type `files`) est écrit avant chaque déplacement puis mis à jour. La restauration exige un fichier intact en quarantaine et un emplacement d'origine libre. Le vidage refuse un dossier de quarantaine lié ou situé ailleurs, puis utilise `shutil.rmtree`, protégé contre les liens symboliques sur Linux.
 
+## Déplacement sans remplacement sur partage réseau
+
+Les déplacements (rangement, quarantaine, restauration) utilisent `renameat2(RENAME_NOREPLACE)` sous Linux. Ce drapeau dépend du système de fichiers : SMB/CIFS et NFS le refusent avec `EINVAL`. Dans ce cas (ou `ENOSYS`, `EOPNOTSUPP`), le nom de destination est d'abord réservé de façon exclusive (`mkdir` ou `open(O_CREAT|O_EXCL)`, qui échouent si le nom existe), puis la source est renommée par-dessus cette réservation avec les mêmes descripteurs de dossiers. Seule notre réservation vide peut être remplacée ; en cas d'échec du renommage, elle est retirée si elle est toujours la nôtre. Après le déplacement, seul le type de la destination est vérifié : un montage SMB sans `serverino` peut attribuer un nouvel inode.
+
 ## Liens physiques
 
 `collect_files` enregistre le périphérique, l'inode et le nombre de liens (`st_nlink`) de chaque fichier, lus directement, y compris sur un partage réseau : une identité absente ou inventée par le client ne peut que faire manquer un lien, pas en inventer un. Dans chaque groupe, les chemins d'un même fichier physique sont fusionnés (`aliases`) ; un groupe qui n'a plus qu'un fichier physique disparaît. Un fichier dont `st_nlink` dépasse 1 est exclu des sélections automatiques et de l'espace récupérable, et préféré comme copie à garder à qualité égale. `duplicates.physical_files` relit de la même façon les pistes des albums groupés : des dossiers qui partagent des inodes ne reçoivent pas de recommandation.

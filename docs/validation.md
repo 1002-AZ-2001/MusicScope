@@ -1,4 +1,8 @@
-# Validation — MusicScope 0.9.0
+# Validation — MusicScope 0.9.1
+
+## Version 0.9.1 — déplacements sur partage réseau
+
+Erreur signalée sur un NAS : `[Errno 22] Argument invalide` lors de la quarantaine d'un album. Cause : `renameat2(RENAME_NOREPLACE)` n'est pas géré par le système de fichiers du partage (page de manuel `rename(2)` : « EINVAL The filesystem does not support one of the flags in flags »). Tests ajoutés en simulant ce refus : déplacement de dossiers et de fichiers par réservation, refus de remplacer une destination existante (dossier ou fichier), retrait de la seule réservation après un échec, erreurs autres non masquées, quarantaine et restauration d'album et de fichiers de bout en bout. **390 tests** passent sous Python 3.12 et 3.13. Non essayé ici : un vrai montage SMB ou NFS.
 
 Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
 

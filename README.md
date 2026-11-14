@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.9.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.9.0) reconnaît les liens physiques (Lidarr, qBittorrent) et ajoute leur diagnostic ; la v0.8.0 a ajouté la recherche de fichiers en double ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.9.1](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.9.1) corrige les déplacements (quarantaine, rangement) sur les partages SMB et NFS ; la v0.9.0 reconnaît les liens physiques (Lidarr, qBittorrent) ; la v0.8.0 a ajouté la recherche de fichiers en double ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.9.0-1_amd64.deb
+sudo apt install ./musicscope_0.9.1-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.9.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.9.1-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```

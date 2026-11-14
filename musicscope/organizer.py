@@ -7,6 +7,7 @@ ne copient/suppriment jamais les fichiers pour traverser un volume.
 from __future__ import annotations
 
 import ctypes
+import errno
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -323,6 +324,52 @@ def _open_directory(path: Path, *, create=False) -> int:
         raise
 
 
+# renameat2 renvoie EINVAL (ou ENOSYS/EOPNOTSUPP) quand le système de fichiers ne
+# gère pas RENAME_NOREPLACE : c'est le cas des partages SMB/CIFS et NFS.
+UNSUPPORTED_NOREPLACE = {errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP}
+
+
+def _renameat2_noreplace(source_fd: int, source_name: str, destination_fd: int, destination_name: str) -> int:
+    """Renvoie 0 ou le code errno ; isolé pour les tests."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(libc, "renameat2", None)
+    if rename is None:
+        return errno.ENOSYS
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(source_fd, os.fsencode(source_name), destination_fd, os.fsencode(destination_name), 1):
+        return ctypes.get_errno()
+    return 0
+
+
+def _rename_over_reservation(source_fd: int, source_name: str, destination_fd: int, destination_name: str,
+                             is_dir: bool) -> None:
+    """Repli sans RENAME_NOREPLACE : le nom de destination est d'abord réservé de façon
+    exclusive (dossier ou fichier vide créé par nous, échec s'il existe déjà), puis la
+    source est renommée par-dessus cette réservation. Rien d'autre ne peut être remplacé.
+    """
+    if is_dir:
+        os.mkdir(destination_name, 0o700, dir_fd=destination_fd)
+    else:
+        os.close(os.open(destination_name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
+                         0o600, dir_fd=destination_fd))
+    reservation = os.stat(destination_name, dir_fd=destination_fd, follow_symlinks=False)
+    try:
+        os.rename(source_name, destination_name, src_dir_fd=source_fd, dst_dir_fd=destination_fd)
+    except BaseException:
+        # Ne retirer que notre propre réservation, restée vide.
+        try:
+            current = os.stat(destination_name, dir_fd=destination_fd, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) == (reservation.st_dev, reservation.st_ino):
+                if is_dir:
+                    os.rmdir(destination_name, dir_fd=destination_fd)
+                elif current.st_size == 0:
+                    os.unlink(destination_name, dir_fd=destination_fd)
+        except OSError:
+            pass
+        raise
+
+
 def _rename_without_replace(source: Path, destination: Path, expected: tuple[int, int], *, is_dir: bool = True):
     if os.name == "nt":
         _check_ancestors(source.parent)
@@ -334,12 +381,6 @@ def _rename_without_replace(source: Path, destination: Path, expected: tuple[int
         return
     if not sys.platform.startswith("linux"):
         raise OrganizeError("Le renommage atomique sans remplacement est pris en charge sous Linux et Windows.")
-    libc = ctypes.CDLL(None, use_errno=True)
-    rename = getattr(libc, "renameat2", None)
-    if rename is None:
-        raise OrganizeError("renameat2 sans remplacement indisponible sur ce système.")
-    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
     source_fd = _open_directory(source.parent)
     try:
         destination_fd = _open_directory(destination.parent)
@@ -348,9 +389,16 @@ def _rename_without_replace(source: Path, destination: Path, expected: tuple[int
             kind_ok = stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode)
             if not kind_ok or (info.st_dev, info.st_ino) != expected:
                 raise OrganizeError("La source a été remplacée.")
-            if rename(source_fd, os.fsencode(source.name), destination_fd, os.fsencode(destination.name), 1):
-                code = ctypes.get_errno()
+            code = _renameat2_noreplace(source_fd, source.name, destination_fd, destination.name)
+            if code in UNSUPPORTED_NOREPLACE:
+                _rename_over_reservation(source_fd, source.name, destination_fd, destination.name, is_dir)
+            elif code:
                 raise OSError(code, os.strerror(code), str(destination))
+            # L'inode n'est pas comparé : sur un partage SMB monté sans « serverino »,
+            # le client peut en attribuer un nouveau après un renommage réussi.
+            moved = os.stat(destination.name, dir_fd=destination_fd, follow_symlinks=False)
+            if not (stat.S_ISDIR(moved.st_mode) if is_dir else stat.S_ISREG(moved.st_mode)):
+                raise OrganizeError(f"Vérification après déplacement impossible : {destination}")
             os.fsync(source_fd)
             os.fsync(destination_fd)
         finally:
