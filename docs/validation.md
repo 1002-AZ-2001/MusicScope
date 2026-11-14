@@ -1,6 +1,14 @@
-# Validation — MusicScope 0.7.0
+# Validation — MusicScope 0.8.0
 
 Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.8.0 — fichiers en double
+
+Tests sur de vrais fichiers : contenu identique sous d'autres noms et dates, combinaison des critères (nom + taille + date, avec ou sans contenu), filtres (fichiers vides et cachés, tailles, extensions, dossiers), dossier de quarantaine et liens ignorés, même morceau en FLAC et MP3 avec tolérance de durée, aides de sélection et refus d'un groupe entièrement coché. L'empreinte audio est testée avec de vraies empreintes Chromaprint (fpcalc 1.5.1) : un même signal encodé en FLAC et en MP3 à 96 kb/s est regroupé, un bruit différent ne l'est pas. Quarantaine, restauration, collision de noms, refus d'un fichier modifié ou d'un emplacement occupé, vidage confirmé limité à la quarantaine et refus d'un dossier de quarantaine lié vers l'extérieur. Dans l'interface : recherche, sélections, refus, quarantaine, restauration, vidage, critère « même morceau », filtres et sélection par dossier.
+
+**368 tests** passent sous Python 3.12 et 3.13. La page a été contrôlée par capture.
+
+Non essayé : une recherche par empreinte sur une très grande bibliothèque réelle (durée), et votre NAS.
 
 ## Version 0.7.0 — albums en double
 

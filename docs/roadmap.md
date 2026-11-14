@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.8 — fichiers en double
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Recherche | Tous les fichiers, six critères combinables (contenu, morceau, nom, taille, date, empreinte audio), filtres de taille, d'extension, de dossier et fichiers cachés. | L'empreinte audio décode chaque fichier : lente sur une grande bibliothèque, et `fpcalc` est requis. |
+| Sélection | Liste à cocher par groupe, meilleure copie mise en évidence, sélections automatiques, sélection par dossier, refus d'un groupe entièrement coché. | — |
+| Retrait | Quarantaine fichier par fichier restaurable, vidage définitif après deux confirmations. | Le partage qBittorrent des fichiers déplacés est interrompu ; un lien physique ne libère pas d'espace. |
+
 ## Version 0.7 — albums en double
 
 | Chantier | Fonction livrée | Limite à connaître |

@@ -323,13 +323,13 @@ def _open_directory(path: Path, *, create=False) -> int:
         raise
 
 
-def _rename_without_replace(source: Path, destination: Path, expected: tuple[int, int]):
+def _rename_without_replace(source: Path, destination: Path, expected: tuple[int, int], *, is_dir: bool = True):
     if os.name == "nt":
         _check_ancestors(source.parent)
         _check_ancestors(destination.parent)
         info = source.lstat()
         if _is_link(source) or (info.st_dev, info.st_ino) != expected:
-            raise OrganizeError("Le dossier source a été remplacé.")
+            raise OrganizeError("La source a été remplacée.")
         os.rename(source, destination)  # Windows refuse un nom déjà présent.
         return
     if not sys.platform.startswith("linux"):
@@ -345,8 +345,9 @@ def _rename_without_replace(source: Path, destination: Path, expected: tuple[int
         destination_fd = _open_directory(destination.parent)
         try:
             info = os.stat(source.name, dir_fd=source_fd, follow_symlinks=False)
-            if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != expected:
-                raise OrganizeError("Le dossier source a été remplacé.")
+            kind_ok = stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode)
+            if not kind_ok or (info.st_dev, info.st_ino) != expected:
+                raise OrganizeError("La source a été remplacée.")
             if rename(source_fd, os.fsencode(source.name), destination_fd, os.fsencode(destination.name), 1):
                 code = ctypes.get_errno()
                 raise OSError(code, os.strerror(code), str(destination))

@@ -22,6 +22,7 @@ L'application sépare le moteur d'analyse de l'interface Qt. Le moteur et ses te
 | `review.py`, `session.py` | Décisions liées aux preuves, estimation prudente, coût SHA et sessions historiques versionnées. |
 | `tagwriter.py`, `tag_editor_gui.py` | Écriture de tags confirmée : différences, journal SQLite des valeurs d'origine, relecture de contrôle et annulation ; dialogues de saisie et d'aperçu. |
 | `folder_names.py`, `duplicates.py` | Lecture des conventions de nommage des dossiers d'album ; groupes d'albums en double, niveau de confiance et copie recommandée. |
+| `file_duplicates.py`, `file_duplicates_gui.py` | Fichiers en double : inventaire filtré de tous les fichiers, critères combinables, aides de sélection, quarantaine fichier par fichier avec journal, restauration et vidage définitif. |
 | `organizer.py` | Plan de déplacement, renommage atomique sans remplacement, journal durable et restauration. |
 | `selftest.py` | Autotest sans réseau du paquet source ou gelé. |
 | `export.py` | Export CSV UTF-8 avec BOM, séparateur point-virgule et neutralisation des formules de tableur. |
@@ -78,6 +79,12 @@ Les valeurs des tags sont considérées comme des données : elles sont échapp�
 Les candidats sont aussi indexés par l'artiste et le titre lus dans le nom du dossier (`folder_names.py`), avec la même clé que les tags : une copie aux tags absents ou différents rejoint ainsi les candidats. Le statut reste celui de la comparaison des pistes. `duplicates.py` réunit les albums reliés par une comparaison concluante (union des paires) ; une paire « À vérifier » n'est retenue que si les deux noms de dossiers désignent le même album et la même année. Les éditions distinctes ne sont jamais regroupées. Le niveau de confiance d'un groupe est celui de son lien le plus faible.
 
 La quarantaine réutilise le plan de rangement (`plan_quarantine` partage ses contrôles avec `plan_album`) : destination `<racine>/_MusicScope_doublons/<chemin relatif>`, suffixe « (2) » en cas de collision, même volume, aucun remplacement, contenu et inventaire vérifiés, journal JSON restaurable. Le scanner ignore ce dossier à la racine.
+
+## Fichiers en double
+
+Les critères sont combinés par « ET » et appliqués du moins coûteux au plus coûteux : clés simples (nom, taille, date à la seconde, artiste et titre normalisés), regroupement par durée (±2 s), SHA-256 via le cache des hachages (le contenu impose une taille égale), puis empreinte Chromaprint brute (`fpcalc -raw`, mise en cache dans `fingerprints.sqlite3`). Deux empreintes sont comparées bit à bit au meilleur décalage (±12 trames) ; le seuil est de 85 % de bits identiques, alors que deux signaux sans rapport en partagent environ 50 %. Les comparaisons d'empreintes sont limitées aux fichiers dont la durée diffère de moins de 5 s.
+
+La quarantaine d'un fichier vérifie qu'il est inchangé depuis la recherche (taille, date, périphérique, inode), puis le renomme sans remplacement (`renameat2(RENAME_NOREPLACE)` sous Linux) vers `<racine>/_MusicScope_doublons/<chemin relatif>`. Le journal (version 2, type `files`) est écrit avant chaque déplacement puis mis à jour. La restauration exige un fichier intact en quarantaine et un emplacement d'origine libre. Le vidage refuse un dossier de quarantaine lié ou situé ailleurs, puis utilise `shutil.rmtree`, protégé contre les liens symboliques sur Linux.
 
 ## Écriture de tags
 
