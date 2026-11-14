@@ -223,6 +223,7 @@ class AdvancedWindow(MainWindow):
         self._action(review, "Albums en double…", lambda: self.tabs.setCurrentIndex(self.duplicates_index))
         self._action(review, "Mettre en quarantaine les copies en trop sélectionnées…", self.quarantine_duplicates)
         self._action(review, "Fichiers en double…", lambda: self.tabs.setCurrentIndex(self.file_duplicates_index))
+        self._action(review, "Diagnostic des liens physiques…", self.diagnose_links)
         session = self.add_menu("Session")
         self._action(session, "Exporter la session JSON…", self.export_review_session)
         self._action(session, "Importer une session JSON…", self.import_review_session)
@@ -703,6 +704,34 @@ class AdvancedWindow(MainWindow):
                 return journal.undo(batch_id, cancel=cancel, progress=progress)
         self.run_task("Rétablissement des tags d’origine…", operation,
                       lambda result: self._tags_written(result, "rétablis"), cancellable=True)
+
+    def diagnose_links(self, show_dialog=True):
+        """Le montage transmet-il les liens physiques ? Résultat affiché, puis renvoyé aux tests."""
+        if self.task is not None:
+            return
+        if not self.root:
+            self.state.setText("Choisissez d’abord la racine de la médiathèque.")
+            return
+        from .hardlinks import diagnose_links
+        root = self.root
+
+        def done(result):
+            self.last_link_diagnostic = result
+            lines = [f"Racine : {result.root}", f"Montage : {result.mount_point or '?'} ({result.filesystem})"]
+            if result.options:
+                lines.append("Options utiles : " + ", ".join(result.options))
+            lines.append(f"Fichiers examinés : {result.examined} • liés ailleurs : {result.linked_files} • "
+                         f"chemins d’un même fichier : {result.shared_pairs}")
+            lines.append(f"Détection des liens : {result.reliability}")
+            lines += result.reasons
+            lines += [f"Exemple : {path} ({count} liens)" for path, count in result.examples[:3]]
+            text = "\n".join(lines)
+            self.state.setText(f"Détection des liens physiques : {result.reliability}.")
+            if show_dialog:
+                QMessageBox.information(self, "Diagnostic des liens physiques", text)
+
+        self.run_task("Diagnostic des liens physiques…",
+                      lambda cancel, progress: diagnose_links(root, cancel=cancel, progress=progress), done)
 
     # Albums en double : groupes, copie à garder, quarantaine journalisée.
     def refresh_duplicates(self):

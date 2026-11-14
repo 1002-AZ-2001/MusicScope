@@ -1,6 +1,14 @@
-# Validation — MusicScope 0.8.0
+# Validation — MusicScope 0.9.0
 
 Validation du 11 novembre 2026. Les cibles de distribution restent Debian et Arch Linux x86-64 ; Windows est reporté.
+
+## Version 0.9.0 — liens physiques
+
+Tests avec de vrais liens physiques sur disque, reproduisant l'import Lidarr : fichier téléchargé hors de la racine, lien dans la bibliothèque, vraie copie ailleurs. La copie liée est gardée et jamais cochée automatiquement, l'espace récupérable ne compte que la vraie copie, deux chemins d'un même fichier ne forment pas de groupe, les alias sont listés. Albums : deux dossiers liés sans recommandation, album lié au téléchargement préféré. Diagnostic : système local, et conclusions simulées pour CIFS (`serverino` avec et sans liens vus, `noserverino`), NFS et un autre système ; lecture des options de montage, chemins échappés compris. Interface : colonne Liens, avertissement de sélection, diagnostic.
+
+**382 tests** passent sous Python 3.12 et 3.13.
+
+Non essayé : un vrai montage SMB ou NFS de TrueNAS. Lancez le diagnostic sur votre racine pour savoir si votre montage transmet les liens.
 
 ## Version 0.8.0 — fichiers en double
 

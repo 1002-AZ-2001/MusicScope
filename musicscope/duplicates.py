@@ -9,6 +9,7 @@ Les éditions distinctes ne sont jamais regroupées.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 
 from .audit import audit_album
 from .comparison import DISTINCT, IDENTICAL, MATCHING, PHYSICAL, PROBABLE, REVIEW, Comparison, _known_missing
@@ -29,6 +30,7 @@ class CopyScore:
     score: tuple
     strengths: list[str] = field(default_factory=list)
     weaknesses: list[str] = field(default_factory=list)
+    linked_files: int = 0
 
 
 @dataclass
@@ -57,6 +59,20 @@ class DuplicateGroup:
         return [album for index, album in enumerate(self.albums) if index != self.keep] if self.keep is not None else []
 
 
+def physical_files(album: Album) -> list[tuple[int, int, int]]:
+    """(périphérique, inode, liens) de chaque piste, lus directement : sur un partage réseau,
+    l'inventaire n'enregistre pas l'identité physique, mais le serveur peut la transmettre."""
+    result = []
+    for track in album.tracks:
+        try:
+            info = os.stat(track.path, follow_symlinks=False)
+        except OSError:
+            continue
+        if (info.st_size, info.st_mtime_ns) == (track.size, track.mtime_ns) and info.st_ino:
+            result.append((info.st_dev, info.st_ino, info.st_nlink))
+    return result
+
+
 def score_album(album: Album) -> CopyScore:
     """Plus le tuple est grand, meilleure est la copie. Les raisons sont lisibles."""
     result = CopyScore(album, ())
@@ -80,7 +96,12 @@ def score_album(album: Album) -> CopyScore:
     if issues:
         result.weaknesses.append(f"{issues} constat(s) d’audit")
     size = sum(track.size for track in album.tracks)
-    result.score = (complete, quality, len(album.tracks), round(ratio, 3), has_mbid, -issues, size)
+    linked = sum(links > 1 for _, _, links in physical_files(album))
+    if linked:
+        # À qualité égale, garder la copie liée : la retirer ne libérerait aucun espace.
+        result.strengths.append(f"{linked} fichier(s) liés physiquement (Lidarr, qBittorrent)")
+    result.linked_files = linked
+    result.score = (complete, quality, len(album.tracks), bool(linked), round(ratio, 3), has_mbid, -issues, size)
     return result
 
 
@@ -145,11 +166,18 @@ def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[Dupli
         years = {parse_folder(album.path).year for album in group_albums} - {""}
         if len(years) > 1:
             reasons.append("Années différentes dans les noms de dossiers : vérifier qu'il ne s'agit pas d'une réédition.")
-        identities = [{(track.device, track.inode) for track in album.tracks} for album in group_albums]
-        shared = any(None not in (device for device, _ in ids) and ids & other
-                     for position, ids in enumerate(identities) for other in identities[position + 1:])
+        identities = [{(device, inode) for device, inode, _ in physical_files(album)} for album in group_albums]
+        shared = any(ids & other for position, ids in enumerate(identities) for other in identities[position + 1:])
         if shared:
-            reasons.append("Fichiers partagés par liens physiques : la quarantaine ne libérera pas cet espace.")
+            keep = None
+            reasons.insert(0, "Ces dossiers partagent les mêmes fichiers (liens physiques, par exemple Lidarr et "
+                              "qBittorrent) : ce ne sont pas des copies. En retirer un ne libère rien et peut casser "
+                              "le partage ou la bibliothèque.")
+            reasons[:] = [reason for reason in reasons if not reason.startswith(("Copie recommandée", "Copies de qualité"))]
+        removable = [scores[index] for index in range(len(scores)) if index != keep] if keep is not None else []
+        if any(score.linked_files for score in removable):
+            reasons.append("Une copie à retirer contient des fichiers liés ailleurs : la quarantaine ne libérera pas leur "
+                           "espace et peut interrompre le partage qBittorrent.")
         groups.append(DuplicateGroup(group_albums, confidence, scores, keep, reasons, shared))
     groups.sort(key=lambda group: (CONFIDENCE_ORDER[group.confidence], group.title.casefold()))
     return groups

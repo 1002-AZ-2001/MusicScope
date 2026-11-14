@@ -164,6 +164,32 @@ class MountCache:
         return self._volumes[key]
 
 
+@dataclass(frozen=True)
+class MountDetails:
+    mount_point: str
+    filesystem: str
+    options: frozenset[str]
+
+
+def mount_details(path: str | Path) -> MountDetails | None:
+    """Montage le plus profond contenant `path`, avec ses options (Linux)."""
+    path = Path(path)
+    best = None
+    try:
+        with open("/proc/self/mountinfo", encoding="utf-8") as stream:
+            for line in stream:
+                left, right = line.split(" - ", 1)
+                fields, extra = left.split(), right.split()
+                mount = Path(_unescape_mount(fields[4]))
+                if path == mount or mount in path.parents:
+                    options = frozenset(fields[5].split(",")) | frozenset(extra[2].split(",") if len(extra) > 2 else ())
+                    if best is None or len(str(mount)) >= len(best.mount_point):
+                        best = MountDetails(str(mount), extra[0], options)
+    except (OSError, ValueError, IndexError):
+        return None
+    return best
+
+
 def is_local_storage(path: Path, mounts: MountCache | None = None) -> bool:
     """Vrai si la racine est sur un volume local reconnu (même règle que l'identité physique)."""
     try:

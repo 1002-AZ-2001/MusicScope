@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.8** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
+La version **0.9** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.8.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.8.0) ajoute la recherche de fichiers en double avec critères combinables, liste à cocher, quarantaine et vidage définitif ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.9.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.9.0) reconnaît les liens physiques (Lidarr, qBittorrent) et ajoute leur diagnostic ; la v0.8.0 a ajouté la recherche de fichiers en double ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.8.0-1_amd64.deb
+sudo apt install ./musicscope_0.9.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.8.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.9.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -137,6 +137,25 @@ Filtres : taille minimale et maximale (les fichiers vides sont toujours ignorés
 Les résultats s'affichent par groupe, avec une case par fichier ; la meilleure copie de chaque groupe est en vert (sans perte, meilleur débit, tags complets). Le menu **Sélection** coche automatiquement : tout sauf la meilleure copie, les fichiers avec perte quand un fichier sans perte existe, tout sauf le plus récent ou le plus ancien. Un clic droit coche ou décoche tous les fichiers d'un dossier (ou de son dossier parent). Un groupe dont toutes les copies sont cochées est refusé : au moins un fichier reste en place.
 
 **Mettre la sélection en quarantaine** déplace les fichiers cochés dans `_MusicScope_doublons` (même chemin relatif, même volume, aucun remplacement, fichier inchangé depuis la recherche exigé), avec un journal. **Restaurer** remet en place les fichiers d'un journal, pour les fichiers comme pour les albums. **Vider la quarantaine** supprime définitivement son contenu après deux confirmations : c'est la seule suppression de MusicScope, et elle ne touche que ce dossier.
+
+### Liens physiques (Lidarr, qBittorrent)
+
+Avec l'option « Use Hardlinks instead of Copy » de Lidarr, un fichier téléchargé par qBittorrent et le même fichier dans la bibliothèque sont **un seul fichier** sur le disque, avec deux chemins. MusicScope en tient compte :
+
+- Deux chemins du même fichier (même périphérique et même inode) ne sont jamais présentés comme des doublons : un seul est gardé dans le groupe, les autres sont indiqués en alias.
+- Un fichier qui a d'autres liens, même hors de la racine analysée (colonne **Liens** supérieure à 1, en jaune), n'est **jamais coché automatiquement** : le retirer ne libère aucun espace et peut interrompre le partage qBittorrent ou retirer le fichier de la bibliothèque Lidarr. À qualité égale, c'est la copie liée qui est gardée. Le cocher à la main demande une confirmation supplémentaire, et l'espace récupérable ne le compte pas.
+- Dans **Albums en double**, deux dossiers qui partagent les mêmes fichiers ne reçoivent aucune recommandation ; un album lié au dossier de téléchargement est préféré comme copie à garder.
+
+**Diagnostic des liens physiques** (page Fichiers en double, ou menu Revue) indique si le montage de votre racine transmet ces informations :
+
+| Montage | Détection |
+| --- | --- |
+| Disque local (ext4, btrfs, ZFS…) | fiable |
+| NFS | fiable : inodes et nombre de liens du serveur |
+| SMB/CIFS avec `serverino` (valeur par défaut) | fiable si des fichiers liés sont vus ; sinon inconnue, selon les extensions Unix/POSIX de Samba |
+| SMB/CIFS avec `noserverino` | non fiable : les liens ne peuvent pas être vus |
+
+En cas de doute, comparez avec le NAS : `stat -c '%h %i' FICHIER` affiche le nombre de liens (2 pour un fichier importé par Lidarr) et l'inode. Pour libérer réellement l'espace d'un fichier lié, il faut aussi retirer l'autre lien, par exemple en supprimant le torrent et ses fichiers dans qBittorrent.
 
 ### Éditeur de tags
 
