@@ -77,6 +77,7 @@ class Fingerprinter:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path)
         self.db.execute("CREATE TABLE IF NOT EXISTS fingerprints (path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER, body TEXT)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS raw_fingerprints (path TEXT PRIMARY KEY, size INTEGER, mtime_ns INTEGER, body TEXT)")
         self.db.commit()
         self.fpcalc = fpcalc
         self._executable = None
@@ -149,6 +150,49 @@ class Fingerprinter:
             self.db.execute("INSERT OR REPLACE INTO fingerprints VALUES (?,?,?,?)",
                             (track.path, track.size, track.mtime_ns, json.dumps(value)))
         return result
+
+
+    def raw(self, track: Track, cancel=None) -> tuple[float, list[int]]:
+        """Empreinte brute (entiers 32 bits) pour mesurer la ressemblance de deux fichiers."""
+        check_cancel(cancel)
+        before = _version(track)
+        row = self.db.execute("SELECT body FROM raw_fingerprints WHERE path=? AND size=? AND mtime_ns=?",
+                              (track.path, track.size, track.mtime_ns)).fetchone()
+        if row:
+            try:
+                value = json.loads(row[0])
+                return float(value["duration"]), [int(item) for item in value["fingerprint"]]
+            except (ValueError, TypeError, KeyError):
+                pass
+        executable = self._find_executable(cancel)
+        try:
+            value = json.loads(self._run([executable, "-raw", "-json", "-length", "120", track.path], cancel))
+            duration = float(value["duration"])
+            raw = [int(item) & 0xFFFFFFFF for item in value["fingerprint"]]
+            if not math.isfinite(duration) or duration <= 0 or not raw or len(raw) > 100000:
+                raise ValueError
+        except (ValueError, TypeError, KeyError) as exc:
+            raise FeatureUnavailable("Réponse Chromaprint illisible.") from exc
+        if _version(track) != before:
+            raise OSError("Fichier modifié pendant le calcul de l'empreinte.")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO raw_fingerprints VALUES (?,?,?,?)",
+                            (track.path, track.size, track.mtime_ns, json.dumps({"duration": duration, "fingerprint": raw})))
+        return duration, raw
+
+
+def fingerprint_similarity(left: list[int], right: list[int], max_offset: int = 12) -> float:
+    """Part de bits identiques (0 à 1) au meilleur décalage temporel des deux empreintes."""
+    best = 0.0
+    for offset in range(-max_offset, max_offset + 1):
+        a = left[max(offset, 0):]
+        b = right[max(-offset, 0):]
+        length = min(len(a), len(b))
+        if length < 8:
+            continue
+        errors = sum(bin(x ^ y).count("1") for x, y in zip(a[:length], b[:length]))
+        best = max(best, 1 - errors / (32 * length))
+    return best
 
 
 class _RequestQueue:

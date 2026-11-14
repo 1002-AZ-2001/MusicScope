@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.7** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
+La version **0.8** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.7.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.7.0) détecte les albums en double sous des noms de dossiers différents et met les copies en trop en quarantaine restaurable ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.8.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.8.0) ajoute la recherche de fichiers en double avec critères combinables, liste à cocher, quarantaine et vidage définitif ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.7.0-1_amd64.deb
+sudo apt install ./musicscope_0.8.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.7.0-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.8.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -120,6 +120,23 @@ MusicScope recommande la copie à garder : album complet, sans perte (FLAC/ALAC 
 **Mettre en quarantaine les copies en trop** (sélectionnez un ou plusieurs groupes) déplace les autres copies dans `_MusicScope_doublons`, à la racine analysée, en conservant leur chemin relatif. Le déplacement suit les règles du rangement : même volume, aucun remplacement, inventaire à jour exigé, journal par dossier. **Restaurer depuis la quarantaine** remet un dossier à sa place. Le scan ignore ce dossier. Rien n'est supprimé : videz vous-même `_MusicScope_doublons` quand vous êtes sûr.
 
 Attention : si qBittorrent partage encore ces fichiers, les déplacer interrompt le partage. Des fichiers liés physiquement (Lidarr, qBittorrent) ne libèrent pas d'espace tant que l'autre lien existe ; MusicScope le signale quand il peut le vérifier (pas sur un partage réseau).
+
+### Fichiers en double
+
+La page **Doublons → Fichiers en double** examine tous les fichiers de la racine (audio, pochettes, textes…), dossier de quarantaine et liens symboliques exclus. Les critères cochés doivent **tous** concorder :
+
+| Critère | Deux fichiers sont des doublons si… |
+| --- | --- |
+| Contenu identique (SHA-256) | leurs octets sont identiques, quels que soient le nom et la date (critère par défaut) |
+| Même morceau | même artiste et même titre dans les tags, durées à ±2 s : un même morceau en FLAC et en MP3 |
+| Même nom / même taille / même date | critères classiques, combinables entre eux ; la date est comparée à la seconde |
+| Empreinte audio (Chromaprint) | le son est presque identique (85 % des bits de l'empreinte), même avec des tags faux ; lent, nécessite `fpcalc` |
+
+Filtres : taille minimale et maximale (les fichiers vides sont toujours ignorés), extensions incluses ou exclues, dossiers exclus (relatifs à la racine), fichiers et dossiers cachés.
+
+Les résultats s'affichent par groupe, avec une case par fichier ; la meilleure copie de chaque groupe est en vert (sans perte, meilleur débit, tags complets). Le menu **Sélection** coche automatiquement : tout sauf la meilleure copie, les fichiers avec perte quand un fichier sans perte existe, tout sauf le plus récent ou le plus ancien. Un clic droit coche ou décoche tous les fichiers d'un dossier (ou de son dossier parent). Un groupe dont toutes les copies sont cochées est refusé : au moins un fichier reste en place.
+
+**Mettre la sélection en quarantaine** déplace les fichiers cochés dans `_MusicScope_doublons` (même chemin relatif, même volume, aucun remplacement, fichier inchangé depuis la recherche exigé), avec un journal. **Restaurer** remet en place les fichiers d'un journal, pour les fichiers comme pour les albums. **Vider la quarantaine** supprime définitivement son contenu après deux confirmations : c'est la seule suppression de MusicScope, et elle ne touche que ce dossier.
 
 ### Éditeur de tags
 

@@ -147,12 +147,15 @@ class AdvancedWindow(MainWindow):
         self.quarantine_button = QPushButton("Mettre en quarantaine les copies en trop…")
         self.quarantine_button.clicked.connect(lambda: self.quarantine_duplicates())
         self.restore_quarantine_button = QPushButton("Restaurer depuis la quarantaine…")
-        self.restore_quarantine_button.clicked.connect(lambda: self.restore_organization())
+        self.restore_quarantine_button.clicked.connect(lambda: self.file_duplicates_page.restore())
         for button in (self.keep_button, self.quarantine_button, self.restore_quarantine_button):
             duplicate_buttons.addWidget(button)
         duplicate_buttons.addStretch(1)
         duplicates_layout.addLayout(duplicate_buttons)
         self.duplicates_index = self.add_page(duplicates_page, "Albums en double", "Doublons")
+        from .file_duplicates_gui import FileDuplicatesPage
+        self.file_duplicates_page = FileDuplicatesPage(self)
+        self.file_duplicates_index = self.add_page(self.file_duplicates_page, "Fichiers en double", "Doublons")
         self.duplicate_groups = []
         self.duplicate_table.selectionModel().selectionChanged.connect(self.show_duplicate_group)
         self.organizer_details = make_browser()
@@ -219,6 +222,7 @@ class AdvancedWindow(MainWindow):
         review.addSeparator()
         self._action(review, "Albums en double…", lambda: self.tabs.setCurrentIndex(self.duplicates_index))
         self._action(review, "Mettre en quarantaine les copies en trop sélectionnées…", self.quarantine_duplicates)
+        self._action(review, "Fichiers en double…", lambda: self.tabs.setCurrentIndex(self.file_duplicates_index))
         session = self.add_menu("Session")
         self._action(session, "Exporter la session JSON…", self.export_review_session)
         self._action(session, "Importer une session JSON…", self.import_review_session)
