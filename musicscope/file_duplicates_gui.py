@@ -25,7 +25,9 @@ CRITERIA_HELP = {
     fd.DATE: "Même date de modification, à la seconde près.",
     fd.FINGERPRINT: "Même enregistrement d’après le son, même si les tags diffèrent. Lent ; nécessite fpcalc.",
 }
-COLUMNS = ["Nom", "Dossier", "Taille", "Modifié", "Format", "Débit", "Durée"]
+COLUMNS = ["Nom", "Dossier", "Taille", "Modifié", "Format", "Débit", "Durée", "Liens"]
+LINKED_TIP = ("Fichier lié physiquement (Lidarr, qBittorrent) : il existe aussi ailleurs. Le retirer ne libère "
+              "aucun espace et peut casser le partage ou la bibliothèque. Jamais coché automatiquement.")
 
 
 def _extensions(text: str) -> frozenset[str]:
@@ -92,6 +94,10 @@ class FileDuplicatesPage(QWidget):
         search_row.addWidget(self.search_button)
         self.result_label = QLabel("Aucune recherche lancée.")
         search_row.addWidget(self.result_label, 1)
+        self.links_button = QPushButton("Diagnostic des liens physiques…")
+        self.links_button.setToolTip("Vérifie si MusicScope voit les liens physiques (Lidarr, qBittorrent) sur ce montage.")
+        self.links_button.clicked.connect(lambda: self.window.diagnose_links())
+        search_row.addWidget(self.links_button)
         layout.addLayout(search_row)
 
         self.tree = QTreeWidget()
@@ -131,7 +137,8 @@ class FileDuplicatesPage(QWidget):
             actions.addWidget(widget)
         actions.addWidget(self.summary, 1)
         layout.addLayout(actions)
-        window.buttons += [self.search_button, self.quarantine_button, self.restore_button, self.empty_button]
+        window.buttons += [self.search_button, self.quarantine_button, self.restore_button, self.empty_button,
+                           self.links_button]
 
     # Recherche
     def options(self) -> fd.ScanOptions:
@@ -189,9 +196,8 @@ class FileDuplicatesPage(QWidget):
         self.tree.clear()
         root = self.window.root.rstrip(os.sep)
         for number, group in enumerate(groups, 1):
-            wasted = sum(record.size for record in group.files) - max(record.size for record in group.files)
             parent = QTreeWidgetItem([f"Groupe {number} — {len(group.files)} fichiers", " + ".join(group.criteria),
-                                      byte_size(wasted), "", "", "", ""])
+                                      byte_size(group.recoverable_bytes), "", "", "", "", ""])
             parent.setFirstColumnSpanned(False)
             parent.setForeground(0, QColor("#80cbc4"))
             parent.setToolTip(2, "Espace récupérable en gardant la plus grosse copie")
@@ -203,12 +209,19 @@ class FileDuplicatesPage(QWidget):
                 item = QTreeWidgetItem([
                     record.name, folder or ".", byte_size(record.size),
                     datetime.fromtimestamp(record.mtime_ns / 1e9).strftime("%d/%m/%Y %H:%M"), record.codec,
-                    f"{record.bitrate} kb/s" if record.bitrate else "", f"{record.duration:.1f} s" if record.duration else ""])
+                    f"{record.bitrate} kb/s" if record.bitrate else "", f"{record.duration:.1f} s" if record.duration else "",
+                    str(record.nlink) + (f" (+{len(record.aliases)} ici)" if record.aliases else "")])
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(0, Qt.CheckState.Unchecked)
                 item.setData(0, Qt.ItemDataRole.UserRole, record.path)
                 item.setToolTip(0, record.path)
                 item.setToolTip(1, record.folder)
+                if record.linked:
+                    for column in range(len(COLUMNS)):
+                        item.setForeground(column, QColor("#ffd27f"))
+                    item.setToolTip(7, LINKED_TIP + ("\nAutres chemins sous la racine : " + ", ".join(record.aliases)
+                                                     if record.aliases else ""))
+                    item.setToolTip(0, record.path + "\n" + LINKED_TIP)
                 if record is best:
                     item.setForeground(0, QColor("#8fd1a8"))
                     item.setToolTip(0, record.path + "\nMeilleure copie de ce groupe")
@@ -217,11 +230,12 @@ class FileDuplicatesPage(QWidget):
             self.tree.addTopLevelItem(parent)
         self.tree.expandAll()
         self.tree.blockSignals(False)
-        for column, width in enumerate((280, 320, 90, 130, 80, 80, 70)):
+        for column, width in enumerate((280, 300, 90, 130, 70, 80, 70, 90)):
             self.tree.setColumnWidth(column, width)
-        wasted = sum(sum(r.size for r in g.files) - max(r.size for r in g.files) for g in groups)
+        wasted = sum(group.recoverable_bytes for group in groups)
+        linked = sum(record.linked for group in groups for record in group.files)
         self.result_label.setText(f"{self.examined} fichiers examinés • {len(groups)} groupes • "
-                                  f"{byte_size(wasted)} récupérables au maximum")
+                                  f"{byte_size(wasted)} récupérables" + (f" • {linked} fichier(s) liés" if linked else ""))
         self.window.set_page_count(self.window.file_duplicates_index, len(groups))
         self.update_summary()
 
@@ -246,9 +260,12 @@ class FileDuplicatesPage(QWidget):
 
     def update_summary(self):
         selected = self.selected()
-        size = sum(self.records[path].size for path in selected)
+        size = sum(self.records[path].size for path in selected if not self.records[path].linked)
+        linked = sum(self.records[path].linked for path in selected)
         full = fd.fully_selected(self.groups, selected)
-        text = f"{len(selected)} fichier(s) coché(s) • {byte_size(size)}"
+        text = f"{len(selected)} fichier(s) coché(s) • {byte_size(size)} libérables"
+        if linked:
+            text += f" • ⚠ {linked} lié(s) : aucun espace libéré"
         if full:
             text += f" • ⚠ {len(full)} groupe(s) entièrement coché(s)"
         self.summary.setText(text)
@@ -283,10 +300,19 @@ class FileDuplicatesPage(QWidget):
                               "fichier par groupe (menu Sélection → Garder le meilleur).")
             return
         records = [self.records[path] for path in sorted(selected)]
-        size = sum(record.size for record in records)
+        size = sum(record.size for record in records if not record.linked)
+        linked = [record for record in records if record.linked]
+        if linked and confirm is None:
+            if QMessageBox.warning(self, "Fichiers liés physiquement",
+                f"{len(linked)} fichier(s) coché(s) sont liés physiquement (Lidarr, qBittorrent). Les retirer ne "
+                "libère AUCUN espace, et peut interrompre le partage qBittorrent ou retirer le fichier de la "
+                "bibliothèque Lidarr.\n\nLes garder cochés quand même ?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
         if confirm is None:
             confirm = QMessageBox.question(self, "Mettre en quarantaine",
-                f"Déplacer {len(records)} fichier(s) ({byte_size(size)}) vers :\n{Path(window.root) / QUARANTINE_DIR}\n\n"
+                f"Déplacer {len(records)} fichier(s) ({byte_size(size)} libérables) vers :\n{Path(window.root) / QUARANTINE_DIR}\n\n"
                 "Si qBittorrent partage encore ces fichiers, le partage sera interrompu. Un fichier lié physiquement "
                 "ne libère pas d’espace tant que l’autre lien existe.\n\nUn journal permet de tout restaurer.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,

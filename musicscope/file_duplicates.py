@@ -11,7 +11,7 @@ restaurable. La seule suppression définitive est « vider la quarantaine ».
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import os
@@ -71,6 +71,13 @@ class FileRecord:
     device: int
     inode: int
     track: Track | None = None
+    nlink: int = 1
+    aliases: list[str] = field(default_factory=list)
+
+    @property
+    def linked(self) -> bool:
+        """Fichier présent ailleurs par lien physique (Lidarr, qBittorrent) : le retirer ne libère rien."""
+        return self.nlink > 1
 
     @property
     def name(self) -> str:
@@ -106,18 +113,25 @@ class FileGroup:
 
     @property
     def shared_inodes(self) -> bool:
-        return len({(record.device, record.inode) for record in self.files}) < len(self.files)
+        return any(record.aliases for record in self.files)
+
+    @property
+    def recoverable_bytes(self) -> int:
+        """Espace libéré en gardant la meilleure copie ; un fichier lié ailleurs ne libère rien."""
+        best = self.best()
+        return sum(record.size for record in self.files if record is not best and not record.linked)
 
     def best(self) -> FileRecord:
         return max(self.files, key=quality_key)
 
 
 def quality_key(record: FileRecord) -> tuple:
-    """Meilleure copie : sans perte, débit, tags complets, chemin le moins profond."""
+    """Meilleure copie : sans perte, débit, puis copie liée (la retirer ne libérerait rien),
+    tags complets, chemin le moins profond."""
     track = record.track
     tags = sum(bool(track.value(key)) for key in ("artist", "title", "album", "tracknumber")) if track else 0
-    return (CODEC_RANK.get(record.codec, 0), record.bitrate or 0, tags, -record.path.count(os.sep), -len(record.path),
-            record.path)
+    return (CODEC_RANK.get(record.codec, 0), record.bitrate or 0, record.linked, tags, -record.path.count(os.sep),
+            -len(record.path), record.path)
 
 
 def _excluded(path: str, folders: tuple[str, ...]) -> bool:
@@ -164,7 +178,8 @@ def collect_files(root: str | Path, options: ScanOptions, tracks: dict[str, Trac
             track = tracks.get(entry.path)
             if track is not None and (track.size, track.mtime_ns) != (info.st_size, info.st_mtime_ns):
                 track = None
-            records.append(FileRecord(entry.path, info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino, track))
+            records.append(FileRecord(entry.path, info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino, track,
+                                      info.st_nlink))
         if progress:
             progress(0, 0, f"Inventaire des fichiers : {directory}")
     records.sort(key=lambda record: record.path)
@@ -286,14 +301,34 @@ def find_duplicates(records: list[FileRecord], options: ScanOptions, cache: Cach
             refined.extend(_union([timed], pairs))
         groups = refined
     order = tuple(criterion for criterion in CRITERIA if criterion in criteria)
-    result = [FileGroup(sorted(group, key=lambda record: record.path), order) for group in groups]
-    result.sort(key=lambda group: (-sum(record.size for record in group.files[1:]), group.files[0].path))
+    result = []
+    for group in groups:
+        physical = _merge_links(group)
+        if len(physical) > 1:
+            result.append(FileGroup(physical, order))
+    result.sort(key=lambda group: (-group.recoverable_bytes, group.files[0].path))
     return result
 
 
+def _merge_links(group: list[FileRecord]) -> list[FileRecord]:
+    """Les chemins d'un même fichier physique (même périphérique et inode) ne sont pas des doublons :
+    un seul est gardé dans le groupe, les autres sont listés comme alias."""
+    by_identity: dict[tuple[int, int], FileRecord] = {}
+    for record in sorted(group, key=lambda record: record.path):
+        key = (record.device, record.inode)
+        if record.inode and key in by_identity:
+            by_identity[key].aliases.append(record.path)
+        else:
+            by_identity[key] = record
+    return sorted(by_identity.values(), key=lambda record: record.path)
+
+
 # Aides de sélection : renvoient l'ensemble des chemins à cocher.
+# Un fichier lié physiquement n'est jamais coché automatiquement : le retirer ne libère pas
+# d'espace et peut casser le partage qBittorrent ou la bibliothèque Lidarr.
 def select_all_but_best(groups: list[FileGroup]) -> set[str]:
-    return {record.path for group in groups for record in group.files if record is not group.best()}
+    return {record.path for group in groups for record in group.files
+            if record is not group.best() and not record.linked}
 
 
 def select_lossy_when_lossless(groups: list[FileGroup]) -> set[str]:
@@ -301,7 +336,7 @@ def select_lossy_when_lossless(groups: list[FileGroup]) -> set[str]:
     for group in groups:
         if any(record.codec in LOSSLESS for record in group.files):
             chosen |= {record.path for record in group.files
-                       if record.track is not None and record.codec not in LOSSLESS}
+                       if record.track is not None and record.codec not in LOSSLESS and not record.linked}
     return chosen
 
 
@@ -309,7 +344,7 @@ def select_keep_by_date(groups: list[FileGroup], newest: bool) -> set[str]:
     chosen = set()
     for group in groups:
         keep = (max if newest else min)(group.files, key=lambda record: (record.mtime_ns, record.path))
-        chosen |= {record.path for record in group.files if record is not keep}
+        chosen |= {record.path for record in group.files if record is not keep and not record.linked}
     return chosen
 
 

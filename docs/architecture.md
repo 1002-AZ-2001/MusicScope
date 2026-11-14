@@ -23,6 +23,7 @@ L'application sépare le moteur d'analyse de l'interface Qt. Le moteur et ses te
 | `tagwriter.py`, `tag_editor_gui.py` | Écriture de tags confirmée : différences, journal SQLite des valeurs d'origine, relecture de contrôle et annulation ; dialogues de saisie et d'aperçu. |
 | `folder_names.py`, `duplicates.py` | Lecture des conventions de nommage des dossiers d'album ; groupes d'albums en double, niveau de confiance et copie recommandée. |
 | `file_duplicates.py`, `file_duplicates_gui.py` | Fichiers en double : inventaire filtré de tous les fichiers, critères combinables, aides de sélection, quarantaine fichier par fichier avec journal, restauration et vidage définitif. |
+| `hardlinks.py` | Diagnostic des liens physiques sous une racine : type et options du montage, fichiers liés, chemins d'un même fichier, fiabilité. |
 | `organizer.py` | Plan de déplacement, renommage atomique sans remplacement, journal durable et restauration. |
 | `selftest.py` | Autotest sans réseau du paquet source ou gelé. |
 | `export.py` | Export CSV UTF-8 avec BOM, séparateur point-virgule et neutralisation des formules de tableur. |
@@ -85,6 +86,12 @@ La quarantaine réutilise le plan de rangement (`plan_quarantine` partage ses co
 Les critères sont combinés par « ET » et appliqués du moins coûteux au plus coûteux : clés simples (nom, taille, date à la seconde, artiste et titre normalisés), regroupement par durée (±2 s), SHA-256 via le cache des hachages (le contenu impose une taille égale), puis empreinte Chromaprint brute (`fpcalc -raw`, mise en cache dans `fingerprints.sqlite3`). Deux empreintes sont comparées bit à bit au meilleur décalage (±12 trames) ; le seuil est de 85 % de bits identiques, alors que deux signaux sans rapport en partagent environ 50 %. Les comparaisons d'empreintes sont limitées aux fichiers dont la durée diffère de moins de 5 s.
 
 La quarantaine d'un fichier vérifie qu'il est inchangé depuis la recherche (taille, date, périphérique, inode), puis le renomme sans remplacement (`renameat2(RENAME_NOREPLACE)` sous Linux) vers `<racine>/_MusicScope_doublons/<chemin relatif>`. Le journal (version 2, type `files`) est écrit avant chaque déplacement puis mis à jour. La restauration exige un fichier intact en quarantaine et un emplacement d'origine libre. Le vidage refuse un dossier de quarantaine lié ou situé ailleurs, puis utilise `shutil.rmtree`, protégé contre les liens symboliques sur Linux.
+
+## Liens physiques
+
+`collect_files` enregistre le périphérique, l'inode et le nombre de liens (`st_nlink`) de chaque fichier, lus directement, y compris sur un partage réseau : une identité absente ou inventée par le client ne peut que faire manquer un lien, pas en inventer un. Dans chaque groupe, les chemins d'un même fichier physique sont fusionnés (`aliases`) ; un groupe qui n'a plus qu'un fichier physique disparaît. Un fichier dont `st_nlink` dépasse 1 est exclu des sélections automatiques et de l'espace récupérable, et préféré comme copie à garder à qualité égale. `duplicates.physical_files` relit de la même façon les pistes des albums groupés : des dossiers qui partagent des inodes ne reçoivent pas de recommandation.
+
+`hardlinks.diagnose_links` lit le montage le plus profond de la racine dans `/proc/self/mountinfo` (type, options du montage et du superbloc, dont `serverino` ou `noserverino` pour CIFS) et parcourt jusqu'à 20 000 fichiers. La conclusion est « Fiable » pour un système local ou NFS ayant montré des liens, ou SMB avec inodes serveur et liens vus ; « Non fiable » avec `noserverino` ; « Inconnue » quand un montage SMB ne montre aucun lien.
 
 ## Écriture de tags
 

@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.9 — liens physiques
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Doublons | Les chemins d'un même fichier ne sont plus des doublons ; un fichier lié ailleurs n'est jamais coché automatiquement, reste préféré à qualité égale et ne compte pas dans l'espace récupérable. | La détection dépend du montage (voir le diagnostic). |
+| Albums | Dossiers partageant les mêmes fichiers sans recommandation ; album lié au téléchargement préféré. | — |
+| Diagnostic | Type et options du montage, fichiers liés, fiabilité, commande de vérification sur le NAS. | Sous Windows, fiabilité seulement estimée. |
+
 ## Version 0.8 — fichiers en double
 
 | Chantier | Fonction livrée | Limite à connaître |
