@@ -55,7 +55,9 @@ def test_paginated_get_diagnostic_and_explicit_token_header(tmp_path):
     assert len(responses.requests) == 2
     for index, request in enumerate(responses.requests):
         assert request.get_method() == "GET"
-        assert request.get_header("X-emby-token") == "secret-test"
+        assert 'Token="secret-test"' in request.get_header("Authorization")
+        assert request.get_header("Authorization").startswith("MediaBrowser ")
+        assert request.get_header("X-emby-token") is None
         assert "secret-test" not in request.full_url
         assert urlsplit(request.full_url).path == "/base/Items"
         assert parse_qs(urlsplit(request.full_url).query)["StartIndex"] == [str(index)]
@@ -68,7 +70,7 @@ def test_missing_mapping_stays_visible_and_prevents_false_absence(tmp_path):
     assert result.complete
     assert result.findings[0].status == "Chemin non résolu"
     assert all(f.status != "Absent du catalogue" for f in result.findings)
-    assert sum(f.status == "Présence au catalogue indéterminée" for f in result.findings) == 2
+    assert result.undetermined == 2
 
 
 def test_mapping_longest_prefix_boundaries_and_root(tmp_path):
@@ -120,9 +122,8 @@ def test_unavailable_service_cannot_claim_absent_catalogue(tmp_path, failure):
     inv = inventory(tmp_path / "local")
     result = JellyfinClient("https://example.test", "key", opener=Responses(failure)).diagnose(
         inv, [PathMapping("/music", inv.root)])
-    assert not result.complete
-    assert result.reasons
-    assert {f.status for f in result.findings} == {"Présence au catalogue indéterminée"}
+    assert not result.complete and result.failed
+    assert result.reasons and result.findings == [] and result.undetermined == 0
 
 
 def test_partial_catalogue_preserves_successful_page_without_false_absence(tmp_path):
@@ -130,9 +131,10 @@ def test_partial_catalogue_preserves_successful_page_without_false_absence(tmp_p
     responses = Responses({"Items": [item(1, "/music/a.flac")], "TotalRecordCount": 2}, URLError("disconnected"))
     result = JellyfinClient("https://example.test", "key", opener=responses, page_size=1).diagnose(
         inv, [PathMapping("/music", inv.root)])
-    assert not result.complete
+    assert not result.complete and not result.failed
     assert result.findings[0].status == "Correspondance"
-    assert result.findings[-1].status == "Présence au catalogue indéterminée"
+    assert result.undetermined == 1 and len(result.findings) == 1
+    assert any("non rapproché" in reason for reason in result.reasons)
 
 
 @pytest.mark.parametrize("pages", [
@@ -194,3 +196,50 @@ def test_offsite_redirect_cannot_forward_token():
     request = Request("https://nas.example/Items", headers={"X-Emby-Token": "secret"})
     with pytest.raises(JellyfinUnavailable):
         handler.redirect_request(request, None, 302, "Found", {}, "https://attacker.example/Items")
+
+
+
+def test_server_info_validates_key_and_lists_music_libraries():
+    responses = Responses({"ServerName": "TrueNAS", "Version": "12.0.1"},
+                          [{"Name": "Musique", "ItemId": "abc-123", "CollectionType": "music",
+                            "Locations": ["/media/Musique"]},
+                           {"Name": "Films", "ItemId": "def", "CollectionType": "movies", "Locations": ["/media/Films"]}],
+                          [{"Name": "Musique", "ItemId": "abc-123", "CollectionType": "music",
+                            "Locations": ["/media/Musique", "/media/Autres"]}])
+    client = JellyfinClient("http://nas:8096/jellyfin", "key", opener=responses)
+    info = client.server_info()
+    assert (info.name, info.version) == ("TrueNAS", "12.0.1")
+    assert responses.requests[0].get_header("Authorization") is None  # informations publiques sans clé
+    assert urlsplit(responses.requests[0].full_url).path == "/jellyfin/System/Info/Public"
+    assert 'Token="key"' in responses.requests[1].get_header("Authorization")
+    libraries = client.libraries()
+    assert [library.name for library in libraries if library.is_music] == ["Musique"]
+    assert libraries[0].locations == ("/media/Musique", "/media/Autres")
+
+
+@pytest.mark.parametrize("code,hint", [(401, "Clé API refusée"), (403, "droits"), (404, "sous-chemin"), (500, "HTTP 500")])
+def test_http_errors_are_explained(tmp_path, code, hint):
+    inv = inventory(tmp_path / "local")
+    result = JellyfinClient("https://example.test", "key", opener=Responses(HTTPError("u", code, "x", {}, None))).diagnose(inv, [])
+    assert result.failed and hint in result.reasons[0]
+    with pytest.raises(JellyfinUnavailable) as error:
+        JellyfinClient("https://example.test", "key", opener=Responses(HTTPError("u", code, "x", {}, None))).libraries()
+    assert hint in str(error.value)
+
+
+def test_library_scope_is_sent_as_parent_id(tmp_path):
+    inv = inventory(tmp_path / "local")
+    responses = Responses({"Items": [], "TotalRecordCount": 0})
+    JellyfinClient("https://example.test", "key", opener=responses, library_id="abc-123").diagnose(inv, [])
+    assert parse_qs(urlsplit(responses.requests[0].full_url).query)["ParentId"] == ["abc-123"]
+    with pytest.raises(ValueError):
+        JellyfinClient("https://example.test", "key", library_id="../x")
+    with pytest.raises(ValueError):
+        JellyfinClient("https://example.test", 'cle"injectee')
+
+
+def test_key_never_in_url_or_errors(tmp_path):
+    responses = Responses(HTTPError("u", 401, "x", {}, None))
+    with pytest.raises(JellyfinUnavailable) as error:
+        JellyfinClient("https://example.test", "tres-secret", opener=responses).libraries()
+    assert "tres-secret" not in str(error.value) and "tres-secret" not in responses.requests[0].full_url

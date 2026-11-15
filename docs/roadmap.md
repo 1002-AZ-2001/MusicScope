@@ -1,5 +1,13 @@
 # Feuille de route appliquée
 
+## Version 0.10 — Jellyfin
+
+| Chantier | Fonction livrée | Limite à connaître |
+| --- | --- | --- |
+| Authentification | En-tête `Authorization: MediaBrowser Token`, accepté par Jellyfin 12 (l'ancien `X-Emby-Token` y est refusé : HTTP 401). | Une clé d'administration est nécessaire pour lister les bibliothèques. |
+| Configuration | Test de connexion (nom, version), choix d'une bibliothèque musicale, correspondance préremplie, réglages mémorisés sans la clé. | — |
+| Résultats | Erreur expliquée sans tableau rempli, filtre « problèmes seulement », compteur des problèmes, fichiers indéterminés totalisés. | — |
+
 ## Version 0.9 — liens physiques
 
 | Chantier | Fonction livrée | Limite à connaître |

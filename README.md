@@ -2,7 +2,7 @@
 
 MusicScope est une application de bureau en français pour inventorier une médiathèque musicale, comparer des albums et vérifier leurs métadonnées avec MusicBrainz. Elle aide à comprendre les ressemblances avant de décider quoi conserver.
 
-La version **0.9** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
+La version **0.10** utilise Python 3.12, PySide6/Qt Widgets, Mutagen et SQLite. Le scan et les diagnostics consultent les fichiers audio en lecture seule. Trois opérations séparées modifient la médiathèque, toujours après un aperçu, une confirmation manuelle et un journal restaurable : le **rangement** renomme un dossier, la **quarantaine des doublons** met de côté les albums en double, l'**éditeur de tags** modifie les tags d'un album. Aucun fichier n'est effacé.
 
 ![MusicScope sous Linux, avec le corpus synthétique](docs/musicscope.png)
 
@@ -14,13 +14,13 @@ Un environnement graphique est nécessaire pour l'interface. Le scan en ligne de
 
 Consultez les [versions GitHub](https://github.com/1002-AZ-2001/MusicScope/releases). La distribution cible pour le moment **Debian et Arch Linux en x86-64** : paquet `.deb`, paquet Arch `.pkg.tar.zst` et archive Linux autonome. Le workflow les publie après leurs tests. Pour l'archive, extrayez **tout le dossier** avant de lancer `MusicScope` ; ne déplacez pas le binaire seul. La distribution Windows est reportée.
 
-La [version v0.9.1](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.9.1) corrige les déplacements (quarantaine, rangement) sur les partages SMB et NFS ; la v0.9.0 reconnaît les liens physiques (Lidarr, qBittorrent) ; la v0.8.0 a ajouté la recherche de fichiers en double ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
+La [version v0.10.0](https://github.com/1002-AZ-2001/MusicScope/releases/tag/v0.10.0) rétablit le diagnostic Jellyfin avec Jellyfin 12 (nouvelle authentification), ajoute le test de connexion et le choix de bibliothèque ; la v0.9.1 a corrigé les déplacements sur partage SMB/NFS ; la v0.9.0 reconnaît les liens physiques (Lidarr, qBittorrent) ; la v0.8.0 a ajouté la recherche de fichiers en double ; la v0.7.0 a ajouté les albums en double ; la v0.6.0 a ajouté l'éditeur de tags et la nouvelle interface ; les versions précédentes restent disponibles sur la [page des versions](https://github.com/1002-AZ-2001/MusicScope/releases). Vérifier les fichiers attachés à chaque version avant installation.
 
 ```bash
 # Debian 12 ou ultérieure, après téléchargement du .deb
-sudo apt install ./musicscope_0.9.1-1_amd64.deb
+sudo apt install ./musicscope_0.10.0-1_amd64.deb
 # Arch Linux, après téléchargement du paquet Arch
-sudo pacman -U ./musicscope-0.9.1-1-x86_64.pkg.tar.zst
+sudo pacman -U ./musicscope-0.10.0-1-x86_64.pkg.tar.zst
 # Lancer l'application après installation
 musicscope
 ```
@@ -189,7 +189,7 @@ Le filtre concerne les tableaux d'inventaire et de rapprochements. L'export couv
 
 Les menus donnent accès aux onglets supplémentaires :
 
-- **Jellyfin** : renseigner l'adresse du serveur et sa clé API dans l'application, puis définir chaque préfixe serveur et son dossier local correspondant. Le catalogue et les fichiers réels restent distincts. Un chemin non résolu ou un catalogue interrompu ne devient pas une preuve d'absence.
+- **Jellyfin** (Services → Diagnostic Jellyfin) : saisir l'adresse du serveur (avec son sous-chemin éventuel, par exemple `/jellyfin`) et une clé API créée dans Jellyfin (Tableau de bord → Clés API). **Tester la connexion** affiche le nom et la version du serveur, puis liste les bibliothèques musicales ; en choisir une limite le diagnostic à celle-ci et préremplit la correspondance « dossier vu par Jellyfin → même dossier sur ce poste » (par exemple `/media/Musique` → `/mnt/TRUENAS/…/Musique`). L'adresse, la bibliothèque et les correspondances sont mémorisées ; la clé ne l'est jamais. La clé est envoyée dans l'en-tête `Authorization: MediaBrowser Token="…"`, seul accepté par défaut depuis Jellyfin 12.0. En cas d'échec (clé refusée, adresse introuvable, serveur injoignable), un message explique la cause, sans remplir le tableau. Les résultats affichent par défaut les problèmes seulement (fichier local absent, absent du catalogue, chemin non résolu, entrée dupliquée…) ; le compteur de la barre latérale ne compte qu'eux, et les fichiers dont la présence reste indéterminée sont totalisés au lieu d'être listés un par un. Un chemin non résolu ou un catalogue interrompu ne devient jamais une preuve d'absence.
 - **Sources audio** : produire l'empreinte d'une piste avec Chromaprint, puis chercher ses enregistrements avec AcoustID ; consulter et comparer les pochettes de deux éditions ; rechercher les alias MusicBrainz d'un artiste. Chaque source et son lien restent visibles. Aucun résultat ne réécrit les tags.
 - **Qualité et espace** : filtrer les constats par catégorie et commencer par les erreurs de lecture ou albums incomplets. Les estimations comptent une seule fois les identités physiques fiables et restent indéterminées si le partage ne permet pas de les vérifier. Une recherche exacte affiche son coût avant de lire les fichiers.
 - **Décisions** : sélectionner deux albums et enregistrer « Conserver les deux », « À revoir » ou « Faux positif », avec une note. Les décisions sont datées et deviennent anciennes quand les fichiers ou les preuves changent.

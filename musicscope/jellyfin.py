@@ -40,6 +40,37 @@ class Diagnosis:
     findings: list[JellyfinFinding] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     complete: bool = False
+    failed: bool = False          # aucun élément du catalogue n'a pu être lu
+    undetermined: int = 0         # fichiers locaux non rapprochés, présence indéterminée
+    catalogue_items: int = 0
+
+
+@dataclass(frozen=True)
+class ServerInfo:
+    name: str
+    version: str
+
+
+@dataclass(frozen=True)
+class Library:
+    name: str
+    item_id: str
+    collection_type: str
+    locations: tuple[str, ...]
+
+    @property
+    def is_music(self) -> bool:
+        return self.collection_type.casefold() == "music"
+
+
+# Statuts qui demandent une action ; « Correspondance » est le cas normal.
+OK_STATUS = "Correspondance"
+HTTP_HINTS = {
+    401: "Clé API refusée (HTTP 401). Vérifiez la clé dans Jellyfin : Tableau de bord → Clés API. "
+         "MusicScope utilise l'en-tête d'authentification actuel « Authorization: MediaBrowser Token ».",
+    403: "Accès refusé (HTTP 403) : la clé n'a pas les droits nécessaires ; utilisez une clé API d'administration.",
+    404: "Adresse introuvable (HTTP 404) : vérifiez l'URL du serveur, y compris un éventuel sous-chemin (ex. /jellyfin).",
+}
 
 
 class JellyfinUnavailable(Exception):
@@ -106,7 +137,7 @@ def _origin(url: str) -> tuple[str, str, int | None]:
 
 
 class _SameOriginRedirect(HTTPRedirectHandler):
-    """Ne pas transmettre X-Emby-Token à un autre hôte ou protocole."""
+    """Ne pas transmettre la clé API (en-tête Authorization) à un autre hôte ou protocole."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if _origin(newurl) != _origin(req.full_url):
             raise JellyfinUnavailable("Redirection Jellyfin vers une autre origine refusée.")
@@ -115,7 +146,7 @@ class _SameOriginRedirect(HTTPRedirectHandler):
 
 class JellyfinClient:
     def __init__(self, server_url: str, api_key: str, opener=urlopen,
-                 page_size: int = 500, max_pages: int = 1000):
+                 page_size: int = 500, max_pages: int = 1000, library_id: str = ""):
         parsed = urlsplit(server_url)
         if (parsed.scheme not in {"http", "https"} or not parsed.hostname
                 or parsed.username is not None or parsed.password is not None
@@ -125,8 +156,11 @@ class JellyfinClient:
             parsed.port
         except ValueError as exc:
             raise ValueError("Port Jellyfin invalide.") from exc
-        if not api_key.strip() or any(character in api_key for character in "\r\n"):
+        if not api_key.strip() or any(character in api_key for character in "\r\n\",\\"):
             raise ValueError("Une clé API Jellyfin valide est requise.")
+        if library_id and not re.fullmatch(r"[A-Za-z0-9-]{1,64}", library_id):
+            raise ValueError("Identifiant de bibliothèque Jellyfin invalide.")
+        self.library_id = library_id
         if not 1 <= page_size <= 1000 or not 1 <= max_pages <= 1000:
             raise ValueError("Pagination Jellyfin hors limites.")
         self.server_url = server_url.rstrip("/") + "/"
@@ -134,37 +168,78 @@ class JellyfinClient:
         self.opener = build_opener(_SameOriginRedirect()).open if opener is urlopen else opener
         self.page_size, self.max_pages = page_size, max_pages
 
-    def _page(self, start: int) -> dict:
-        query = urlencode({"IncludeItemTypes": "Audio", "Recursive": "true", "Fields": "Path",
-                           "StartIndex": start, "Limit": self.page_size, "EnableTotalRecordCount": "true"})
-        request = Request(urljoin(self.server_url, "Items") + "?" + query,
-                          headers={"X-Emby-Token": self._api_key, "Accept": "application/json",
-                                   "User-Agent": "MusicScope/0.2.0 (https://github.com/1002-AZ-2001/MusicScope)"},
-                          method="GET")
+    def _headers(self, authenticated: bool = True) -> dict[str, str]:
+        from . import __version__
+        headers = {"Accept": "application/json",
+                   "User-Agent": f"MusicScope/{__version__} (https://github.com/1002-AZ-2001/MusicScope)"}
+        if authenticated:
+            # Schéma actuel ; X-Emby-Token et api_key sont désactivés par défaut depuis Jellyfin 12.0.
+            headers["Authorization"] = (f'MediaBrowser Client="MusicScope", Device="MusicScope", '
+                                        f'DeviceId="musicscope", Version="{__version__}", Token="{self._api_key}"')
+        return headers
+
+    def _get(self, path: str, query: dict | None = None, authenticated: bool = True,
+             max_bytes: int = 16 * 1024 * 1024):
+        url = urljoin(self.server_url, path) + ("?" + urlencode(query) if query else "")
+        request = Request(url, headers=self._headers(authenticated), method="GET")
         try:
             with self.opener(request, timeout=20) as response:
-                body = response.read(16 * 1024 * 1024 + 1)
-            if len(body) > 16 * 1024 * 1024:
+                body = response.read(max_bytes + 1)
+            if len(body) > max_bytes:
                 raise JellyfinUnavailable("Réponse Jellyfin trop volumineuse.")
-            page = json.loads(body)
-            if not isinstance(page, dict) or not isinstance(page.get("Items"), list):
-                raise JellyfinUnavailable("Catalogue Jellyfin illisible ou incomplet.")
-            items = page["Items"]
-            if len(items) > self.page_size or any(not isinstance(item, dict) for item in items):
-                raise JellyfinUnavailable("Page Jellyfin invalide.")
-            total = page.get("TotalRecordCount")
-            if total is not None and (type(total) is not int or total < 0):
-                raise JellyfinUnavailable("Nombre total d'éléments Jellyfin invalide.")
-            for item in items:
-                if not all(isinstance(item.get(field, ""), str) for field in ("Id", "Path", "Name")):
-                    raise JellyfinUnavailable("Entrée du catalogue Jellyfin invalide.")
-            return page
+            return json.loads(body)
         except HTTPError as exc:
-            raise JellyfinUnavailable(f"Jellyfin indisponible (HTTP {exc.code}).") from exc
+            raise JellyfinUnavailable(HTTP_HINTS.get(exc.code, f"Jellyfin indisponible (HTTP {exc.code}).")) from exc
         except (URLError, OSError, TimeoutError) as exc:
-            raise JellyfinUnavailable("Connexion Jellyfin indisponible ou délai dépassé.") from exc
+            raise JellyfinUnavailable("Connexion Jellyfin impossible : vérifiez l'adresse, le port et le réseau.") from exc
         except (ValueError, UnicodeError) as exc:
-            raise JellyfinUnavailable("Réponse Jellyfin illisible.") from exc
+            raise JellyfinUnavailable("Réponse Jellyfin illisible : l'adresse désigne-t-elle bien Jellyfin ?") from exc
+
+    def server_info(self) -> ServerInfo:
+        """Nom et version, sans clé ; puis un appel authentifié pour valider la clé."""
+        info = self._get("System/Info/Public", authenticated=False, max_bytes=1024 * 1024)
+        if not isinstance(info, dict):
+            raise JellyfinUnavailable("Réponse Jellyfin illisible.")
+        result = ServerInfo(str(info.get("ServerName", "")), str(info.get("Version", "")))
+        self.libraries()
+        return result
+
+    def libraries(self) -> list[Library]:
+        data = self._get("Library/VirtualFolders", max_bytes=4 * 1024 * 1024)
+        if not isinstance(data, list):
+            raise JellyfinUnavailable("Liste des bibliothèques Jellyfin illisible.")
+        result = []
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            locations = entry.get("Locations") or []
+            if not isinstance(locations, list):
+                locations = []
+            item_id = str(entry.get("ItemId") or "")
+            if item_id and not re.fullmatch(r"[A-Za-z0-9-]{1,64}", item_id):
+                continue
+            result.append(Library(str(entry.get("Name") or "Sans nom"), item_id, str(entry.get("CollectionType") or ""),
+                                  tuple(str(location) for location in locations if isinstance(location, str))))
+        return result
+
+    def _page(self, start: int) -> dict:
+        query = {"IncludeItemTypes": "Audio", "Recursive": "true", "Fields": "Path",
+                 "StartIndex": start, "Limit": self.page_size, "EnableTotalRecordCount": "true"}
+        if self.library_id:
+            query["ParentId"] = self.library_id
+        page = self._get("Items", query)
+        if not isinstance(page, dict) or not isinstance(page.get("Items"), list):
+            raise JellyfinUnavailable("Catalogue Jellyfin illisible ou incomplet.")
+        items = page["Items"]
+        if len(items) > self.page_size or any(not isinstance(item, dict) for item in items):
+            raise JellyfinUnavailable("Page Jellyfin invalide.")
+        total = page.get("TotalRecordCount")
+        if total is not None and (type(total) is not int or total < 0):
+            raise JellyfinUnavailable("Nombre total d'éléments Jellyfin invalide.")
+        for item in items:
+            if not all(isinstance(item.get(field, ""), str) for field in ("Id", "Path", "Name")):
+                raise JellyfinUnavailable("Entrée du catalogue Jellyfin invalide.")
+        return page
 
     def diagnose(self, inventory: Inventory, mappings: list[PathMapping], cancel=None, progress=None) -> Diagnosis:
         result = Diagnosis()
@@ -205,9 +280,14 @@ class JellyfinClient:
                 raise JellyfinUnavailable("Limite de pagination Jellyfin atteinte ; diagnostic incomplet.")
         except JellyfinUnavailable as exc:
             result.reasons.append(str(exc))
+            if not items:
+                # Rien n'a été lu : aucune comparaison n'aurait de sens.
+                result.failed = True
+                return result
             result.reasons.append("Catalogue incomplet : aucune absence du catalogue ne peut être conclue.")
         check_cancel(cancel)
         self._compare(inventory, mappings, items, result, cancel, progress)
+        result.catalogue_items = len(items)
         result.reasons.append(f"{len(items)} entrées de catalogue examinées ; {sum(len(a.tracks) for a in inventory.albums)} fichiers inventoriés.")
         return result
 
@@ -269,14 +349,19 @@ class JellyfinClient:
             result.findings.append(finding)
             if progress:
                 progress(index, len(items), server)
+        known_absent = result.complete and not unresolved
         for key, path in sorted(local.items()):
             if key in represented:
                 continue
-            known_absent = result.complete and not unresolved
+            if not known_absent:
+                # Une ligne par fichier n'apprendrait rien : un compteur suffit.
+                result.undetermined += 1
+                continue
             result.findings.append(JellyfinFinding(
-                "Absent du catalogue" if known_absent else "Présence au catalogue indéterminée",
-                local_path=path,
-                reason="Aucune entrée du catalogue complet ne correspond à ce fichier inventorié." if known_absent else
-                       "Le catalogue est incomplet ou contient des chemins non résolus ; une absence ne peut pas être affirmée."))
+                "Absent du catalogue", local_path=path,
+                reason="Aucune entrée du catalogue complet ne correspond à ce fichier inventorié."))
+        if result.undetermined:
+            result.reasons.append(f"{result.undetermined} fichier(s) local(aux) non rapproché(s) : présence au catalogue "
+                                  "indéterminée tant que le catalogue est incomplet ou que des chemins restent non résolus.")
         if unresolved:
             result.reasons.append("Des chemins serveur restent non résolus ; la présence des fichiers non rapprochés reste indéterminée.")

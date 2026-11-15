@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.9.1
+# Validation — MusicScope 0.10.0
+
+## Version 0.10.0 — Jellyfin
+
+Problème signalé : « Jellyfin indisponible (HTTP 401) », 0 entrée de catalogue examinée, et 96 585 lignes « Présence au catalogue indéterminée ». Cause : la clé était envoyée dans `X-Emby-Token`, mécanisme déprécié que Jellyfin 12.0 désactive par défaut (notes de version : « Deprecated authorization mechanisms are now disabled by default »). Tests : en-tête `Authorization: MediaBrowser Token` sans `X-Emby-Token` ni clé dans l'URL, informations publiques sans clé, liste des bibliothèques, explications des codes 401/403/404/500, portée `ParentId`, refus des clés et identifiants dangereux, échec sans comparaison ni lignes, fichiers indéterminés comptés. Interface : test de connexion, sélection automatique de l'unique bibliothèque musicale, correspondance préremplie sans écraser celle de l'utilisateur, échec lisible, filtre et compteur des problèmes, réglages mémorisés sans la clé. **402 tests** passent sous Python 3.12 et 3.13. Non essayé : votre serveur Jellyfin réel.
+
 
 ## Version 0.9.1 — déplacements sur partage réseau
 

@@ -121,7 +121,7 @@ def test_jellyfin_separate_paths_and_credentials_never_exported(window, tmp_path
     from musicscope.jellyfin import Diagnosis, JellyfinFinding, PathMapping
 
     class Client:
-        def __init__(self, url, key):
+        def __init__(self, url, key, library_id=""):
             assert url == "http://jellyfin.local:8096"
             assert key == "secret-session"
 
