@@ -24,39 +24,106 @@ def byte_label(value) -> str:
 
 
 class JellyfinDialog(QDialog):
-    """Les identifiants restent dans ce dialogue et dans la session courante."""
-    def __init__(self, root, previous=None, parent=None):
+    """Configuration du diagnostic. La clé API reste dans la session ; elle n'est jamais enregistrée."""
+    def __init__(self, root, previous=None, parent=None, client_factory=None):
         super().__init__(parent)
+        previous = previous or {}
+        self.root = root
+        self.client_factory = client_factory
         self.setWindowTitle("Diagnostic Jellyfin — requêtes de consultation")
-        self.resize(800, 430)
+        self.resize(820, 520)
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        self.server = QLineEdit(previous[0] if previous else "")
-        self.server.setPlaceholderText("https://jellyfin.exemple.fr ou http://serveur:8096")
-        self.token = QLineEdit(previous[1] if previous else "")
+        self.server = QLineEdit(previous.get("server", ""))
+        self.server.setPlaceholderText("http://truenas:8096 (ajoutez le sous-chemin éventuel, ex. /jellyfin)")
+        self.token = QLineEdit(previous.get("key", ""))
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.token.setPlaceholderText("Tableau de bord Jellyfin → Clés API")
         form.addRow("Adresse du serveur", self.server)
         form.addRow("Clé API (session seulement)", self.token)
+        test_row = QHBoxLayout()
+        self.test_button = QPushButton("Tester la connexion")
+        self.test_button.clicked.connect(self.test_connection)
+        self.status = QLabel("Testez la connexion pour lister vos bibliothèques musicales.")
+        self.status.setWordWrap(True)
+        test_row.addWidget(self.test_button)
+        test_row.addWidget(self.status, 1)
+        form.addRow("", test_row)
+        self.library = QComboBox()
+        self.library.addItem("Toutes les bibliothèques", "")
+        if previous.get("library_id"):
+            self.library.addItem(previous.get("library_name") or "Bibliothèque enregistrée", previous["library_id"])
+            self.library.setCurrentIndex(1)
+        self.library.currentIndexChanged.connect(self.library_changed)
+        form.addRow("Bibliothèque", self.library)
         layout.addLayout(form)
-        layout.addWidget(QLabel("Correspondances explicites : chemin du catalogue → chemin de ce poste."))
+        layout.addWidget(QLabel("Correspondances : chemin vu par Jellyfin → même dossier sur ce poste. "
+                                "Choisir une bibliothèque les préremplit."))
         self.mapping_table = QTableWidget(0, 2)
-        self.mapping_table.setHorizontalHeaderLabels(["Préfixe serveur", "Préfixe local"])
+        self.mapping_table.setHorizontalHeaderLabels(["Préfixe serveur (Jellyfin)", "Préfixe local (ce poste)"])
         self.mapping_table.horizontalHeader().setStretchLastSection(True)
-        self.mapping_table.setColumnWidth(0, 350)
-        rows = previous[2] if previous else [("/media/Musique", root)]
-        for server, local in rows:
+        self.mapping_table.setColumnWidth(0, 360)
+        for server, local in previous.get("mappings") or [("/media/Musique", root)]:
             self.add_mapping(server, local)
         layout.addWidget(self.mapping_table)
         add_button = QPushButton("Ajouter une correspondance")
         add_button.clicked.connect(lambda: self.add_mapping("", ""))
         layout.addWidget(add_button)
-        layout.addWidget(QLabel("Les chemins sans correspondance restent visibles. Aucun changement du catalogue n'est envoyé."))
+        layout.addWidget(QLabel("Seules des requêtes de lecture sont envoyées : le catalogue n'est jamais modifié."))
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Comparer")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Lancer le diagnostic")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Annuler")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.libraries = []
+
+    def _client(self):
+        from .jellyfin import JellyfinClient
+        factory = self.client_factory or JellyfinClient
+        return factory(self.server.text().strip(), self.token.text())
+
+    def test_connection(self):
+        from PySide6.QtWidgets import QApplication
+        from .jellyfin import JellyfinUnavailable
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            client = self._client()
+            info = client.server_info()
+            self.libraries = [library for library in client.libraries() if library.is_music]
+        except (ValueError, JellyfinUnavailable) as exc:
+            self.status.setText(f"Échec : {exc}")
+            self.status.setStyleSheet("color:#ff9e80")
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+        current = self.library.currentData()
+        self.library.blockSignals(True)
+        self.library.clear()
+        self.library.addItem("Toutes les bibliothèques", "")
+        for library in self.libraries:
+            self.library.addItem(f"{library.name} — {', '.join(library.locations) or 'aucun dossier'}", library.item_id)
+        index = self.library.findData(current) if current else -1
+        # Aucun choix précédent et une seule bibliothèque musicale : la sélectionner.
+        self.library.setCurrentIndex(index if index >= 0 else (1 if len(self.libraries) == 1 else 0))
+        self.library.blockSignals(False)
+        self.library_changed()
+        self.status.setText(f"Connecté à « {info.name or 'Jellyfin'} » — version {info.version or '?'} — "
+                            f"{len(self.libraries)} bibliothèque(s) musicale(s).")
+        self.status.setStyleSheet("color:#8fd1a8")
+        return True
+
+    def library_changed(self, *_):
+        library = next((item for item in self.libraries if item.item_id == self.library.currentData()), None)
+        if library is None or not library.locations:
+            return
+        rows = [row for row in self._rows() if any(row)]
+        defaults = {("/media/Musique", self.root)}
+        if rows and set(rows) - defaults:
+            return  # correspondances saisies par l'utilisateur : ne pas les écraser
+        self.mapping_table.setRowCount(0)
+        for location in library.locations:
+            self.add_mapping(location, self.root)
 
     def add_mapping(self, server, local):
         row = self.mapping_table.rowCount()
@@ -64,14 +131,19 @@ class JellyfinDialog(QDialog):
         self.mapping_table.setItem(row, 0, QTableWidgetItem(server))
         self.mapping_table.setItem(row, 1, QTableWidgetItem(local))
 
-    def configuration(self):
+    def _rows(self):
         rows = []
         for row in range(self.mapping_table.rowCount()):
-            values = [self.mapping_table.item(row, col).text().strip() if self.mapping_table.item(row, col) else ""
-                      for col in range(2)]
-            if any(values):
-                rows.append(tuple(values))
-        return self.server.text().strip(), self.token.text(), rows
+            rows.append(tuple(self.mapping_table.item(row, col).text().strip() if self.mapping_table.item(row, col) else ""
+                              for col in range(2)))
+        return rows
+
+    def configuration(self):
+        rows = [row for row in self._rows() if any(row)]
+        return self.server.text().strip(), self.token.text(), rows, self.library.currentData() or ""
+
+    def library_name(self) -> str:
+        return self.library.currentText() if self.library.currentData() else ""
 
 
 class AdvancedWindow(MainWindow):
@@ -101,7 +173,23 @@ class AdvancedWindow(MainWindow):
     def _build_extended_tabs(self):
         self.jellyfin_table, self.jellyfin_model, self.jellyfin_proxy = make_table(
             ["Statut", "Chemin serveur", "Chemin local", "Titre", "Identifiant catalogue", "Motif"])
-        self.jellyfin_index = self.add_page(self.jellyfin_table, "Jellyfin", "Services")
+        jellyfin_page = QWidget()
+        jellyfin_layout = QVBoxLayout(jellyfin_page)
+        jellyfin_bar = QHBoxLayout()
+        self.jellyfin_summary = QLabel("Menu Services → Diagnostic Jellyfin, ou bouton ci-contre.")
+        self.jellyfin_summary.setWordWrap(True)
+        jellyfin_bar.addWidget(self.jellyfin_summary, 1)
+        self.jellyfin_filter = QComboBox()
+        self.jellyfin_filter.addItem("Problèmes seulement", "problems")
+        self.jellyfin_filter.addItem("Tout afficher", "all")
+        self.jellyfin_filter.currentIndexChanged.connect(self.filter_jellyfin)
+        jellyfin_bar.addWidget(self.jellyfin_filter)
+        self.jellyfin_button = QPushButton("Configurer et lancer…")
+        self.jellyfin_button.clicked.connect(lambda: self.start_jellyfin())
+        jellyfin_bar.addWidget(self.jellyfin_button)
+        jellyfin_layout.addLayout(jellyfin_bar)
+        jellyfin_layout.addWidget(self.jellyfin_table, 1)
+        self.jellyfin_index = self.add_page(jellyfin_page, "Jellyfin", "Services")
         sources_page = QWidget()
         sources_layout = QVBoxLayout(sources_page)
         self.sources_details = make_browser(external_links=True)
@@ -425,29 +513,71 @@ class AdvancedWindow(MainWindow):
         self.run_task("Estimation de l’espace, sans compter deux fois les liens physiques…",
                       lambda cancel, progress: storage_summary(self.inventory, self.exact_groups), done)
 
-    def start_jellyfin(self, server_url=None, api_key=None, mappings=None):
+    def _jellyfin_previous(self) -> dict:
+        """Réglages de la session (clé comprise), sinon ceux enregistrés (sans clé)."""
+        if self._jellyfin_config:
+            return self._jellyfin_config
+        saved = self._preferences().get("jellyfin")
+        return saved if isinstance(saved, dict) else {}
+
+    def start_jellyfin(self, server_url=None, api_key=None, mappings=None, library_id=""):
         if not self._fresh() or self.task is not None:
             return
         from .jellyfin import JellyfinClient, PathMapping
-        if server_url is None:
-            dialog = JellyfinDialog(self.root, self._jellyfin_config, self)
+        interactive = server_url is None
+        if interactive:
+            dialog = JellyfinDialog(self.root, self._jellyfin_previous(), self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            server_url, api_key, mapping_rows = dialog.configuration()
-            self._jellyfin_config = server_url, api_key, mapping_rows
+            server_url, api_key, mapping_rows, library_id = dialog.configuration()
+            self._jellyfin_config = {"server": server_url, "key": api_key, "mappings": mapping_rows,
+                                     "library_id": library_id, "library_name": dialog.library_name()}
+            # La clé n'est jamais écrite sur disque.
+            self.save_preferences(jellyfin={"server": server_url, "mappings": mapping_rows, "library_id": library_id,
+                                            "library_name": dialog.library_name()})
             mappings = [PathMapping(*row) for row in mapping_rows]
         def operation(cancel, progress):
-            return JellyfinClient(server_url, api_key).diagnose(self.inventory, mappings or [], cancel=cancel, progress=progress)
+            return JellyfinClient(server_url, api_key, library_id=library_id).diagnose(
+                self.inventory, mappings or [], cancel=cancel, progress=progress)
         def done(result):
             self.jellyfin_result = result
             self.jellyfin_model.removeRows(0, self.jellyfin_model.rowCount())
+            self.tabs.setCurrentIndex(self.jellyfin_index)
+            if getattr(result, "failed", False):
+                self.set_page_count(self.jellyfin_index, None)
+                message = " ".join(result.reasons)
+                self.jellyfin_summary.setText(f"Diagnostic impossible : {message}")
+                self.show_error(f"Diagnostic Jellyfin impossible : {message}")
+                if interactive:
+                    QMessageBox.warning(self, "Diagnostic Jellyfin", message)
+                return
+            from .jellyfin import OK_STATUS
             for finding in result.findings:
                 append_row(self.jellyfin_model, [finding.status, finding.server_path, finding.local_path,
                     finding.title, finding.item_id, finding.reason])
-            self.set_page_count(self.jellyfin_index, len(result.findings))
-            self.tabs.setCurrentIndex(self.jellyfin_index)
+            counts = {}
+            for finding in result.findings:
+                counts[finding.status] = counts.get(finding.status, 0) + 1
+            problems = sum(count for status, count in counts.items() if status != OK_STATUS)
+            self.set_page_count(self.jellyfin_index, problems)
+            parts = [f"{count} {status.lower()}" for status, count in sorted(counts.items(), key=lambda kv: -kv[1])]
+            if getattr(result, "undetermined", 0):
+                parts.append(f"{result.undetermined} fichier(s) à présence indéterminée")
+            self.jellyfin_summary.setText(("Catalogue complet. " if result.complete else "Catalogue incomplet. ")
+                                          + (" • ".join(parts) or "Aucun élément."))
+            self.filter_jellyfin()
             self.state.setText(("Catalogue examiné. " if result.complete else "Diagnostic incomplet. ") + " | ".join(result.reasons))
         self.run_task("Consultation du catalogue Jellyfin…", operation, done)
+
+    @Slot()
+    def filter_jellyfin(self, *_):
+        from PySide6.QtCore import QRegularExpression
+        from .jellyfin import OK_STATUS
+        self.jellyfin_proxy.setFilterKeyColumn(0)
+        if self.jellyfin_filter.currentData() == "problems":
+            self.jellyfin_proxy.setFilterRegularExpression(QRegularExpression(f"^(?!{OK_STATUS}$)"))
+        else:
+            self.jellyfin_proxy.setFilterRegularExpression(QRegularExpression(""))
 
     def start_recognition(self, api_key=None, track=None):
         if not self._fresh() or self.task is not None:
