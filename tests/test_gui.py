@@ -109,7 +109,10 @@ def test_full_qt_scan_compare_exact_export_and_restore(window, tmp_path, monkeyp
 
     restored = MainWindow(window.cache_dir)
     try:
+        QTest.qWait(20)  # le chargement du cache démarre après l'affichage
+        wait_for_task(restored)
         assert restored.root == str(library)
+        assert restored.matches  # rapprochements recalculés (0 avant la v0.10.2)
         assert restored.album_model.rowCount() == window.album_model.rowCount()
         assert "chargé depuis le cache" in restored.state.text()
     finally:

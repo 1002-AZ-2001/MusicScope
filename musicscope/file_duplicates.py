@@ -275,7 +275,7 @@ def find_duplicates(records: list[FileRecord], options: ScanOptions, cache: Cach
     if FINGERPRINT in criteria:
         if fingerprinter is None:
             raise ValueError("Chromaprint est nécessaire pour comparer les empreintes.")
-        from .recognition import fingerprint_similarity
+        from .recognition import FeatureUnavailable, fingerprint_similarity
         total = sum(len(group) for group in groups)
         done, raw = 0, {}
         for group in groups:
@@ -283,8 +283,8 @@ def find_duplicates(records: list[FileRecord], options: ScanOptions, cache: Cach
                 check_cancel(cancel)
                 try:
                     raw[id(record)] = fingerprinter.raw(record.track, cancel)
-                except OSError:
-                    pass
+                except (OSError, ValueError, FeatureUnavailable):
+                    pass  # fichier que fpcalc ne décode pas : ignoré, la recherche continue
                 done += 1
                 if progress:
                     progress(done, total, f"Empreinte audio : {record.path}")
@@ -313,10 +313,11 @@ def find_duplicates(records: list[FileRecord], options: ScanOptions, cache: Cach
 def _merge_links(group: list[FileRecord]) -> list[FileRecord]:
     """Les chemins d'un même fichier physique (même périphérique et inode) ne sont pas des doublons :
     un seul est gardé dans le groupe, les autres sont listés comme alias."""
-    by_identity: dict[tuple[int, int], FileRecord] = {}
+    by_identity: dict[tuple, FileRecord] = {}
     for record in sorted(group, key=lambda record: record.path):
-        key = (record.device, record.inode)
-        if record.inode and key in by_identity:
+        # Inode 0 : identité inconnue (Windows, certains montages) ; chaque chemin reste distinct.
+        key = (record.device, record.inode) if record.inode else ("chemin", record.path)
+        if key in by_identity:
             by_identity[key].aliases.append(record.path)
         else:
             by_identity[key] = record
@@ -413,7 +414,9 @@ def quarantine_files(records: list[FileRecord], library_root: str | Path, journa
             info = source.lstat()
             if not stat_module.S_ISREG(info.st_mode):
                 raise OrganizeError("Ce n'est pas un fichier ordinaire.")
-            if (info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino) != (item.size, item.mtime_ns, item.device, item.inode):
+            # Sans identité connue à l'analyse (inode 0, Windows), seules taille et date sont comparées.
+            identity = (info.st_dev, info.st_ino) if item.inode else (item.device, item.inode)
+            if (info.st_size, info.st_mtime_ns) + identity != (item.size, item.mtime_ns, item.device, item.inode):
                 raise OrganizeError("Fichier modifié depuis l'analyse : relancez la recherche.")
             destination = _destination(root, source)
             _mkdir_safe(destination.parent)

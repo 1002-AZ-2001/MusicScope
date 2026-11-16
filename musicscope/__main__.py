@@ -1,6 +1,7 @@
 """Point d'entrée graphique et commandes utiles hors interface."""
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -56,6 +57,10 @@ def main() -> int:
         return app.exec()
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"MusicScope : {exc}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as exc:
+        print(f"MusicScope : base locale illisible dans {args.cache} ({exc}). Renommez ou supprimez le fichier "
+              ".sqlite3 en cause, puis relancez.", file=sys.stderr)
         return 1
 
 

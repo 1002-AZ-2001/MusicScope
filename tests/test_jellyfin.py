@@ -23,10 +23,16 @@ class Responses:
     def __call__(self, request, timeout):
         self.requests.append(request)
         assert timeout == 20
-        response = self.responses.pop(0)
+        # La dernière réponse se répète : relances et relecture finale du total la retrouvent.
+        response = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
         if isinstance(response, Exception):
             raise response
         return io.BytesIO(json.dumps(response).encode())
+
+
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch):
+    monkeypatch.setattr("musicscope.jellyfin.time.sleep", lambda seconds: None)
 
 
 def item(number, path, **fields):
@@ -52,7 +58,7 @@ def test_paginated_get_diagnostic_and_explicit_token_header(tmp_path):
     assert result.complete
     assert [f.status for f in result.findings] == ["Correspondance", "Fichier local absent", "Absent du catalogue"]
     assert result.findings[0].local_path == str(tmp_path / "local" / "a.flac")
-    assert len(responses.requests) == 2
+    assert len(responses.requests) == 3  # deux pages, puis relecture du total
     for index, request in enumerate(responses.requests):
         assert request.get_method() == "GET"
         assert 'Token="secret-test"' in request.get_header("Authorization")
@@ -60,7 +66,9 @@ def test_paginated_get_diagnostic_and_explicit_token_header(tmp_path):
         assert request.get_header("X-emby-token") is None
         assert "secret-test" not in request.full_url
         assert urlsplit(request.full_url).path == "/base/Items"
-        assert parse_qs(urlsplit(request.full_url).query)["StartIndex"] == [str(index)]
+        query = parse_qs(urlsplit(request.full_url).query)
+        assert query["StartIndex"] == [str(index % 2)]
+        assert query["SortBy"] == ["DateCreated,SortName"] and query["SortOrder"] == ["Ascending"]
 
 
 def test_missing_mapping_stays_visible_and_prevents_false_absence(tmp_path):
@@ -243,3 +251,53 @@ def test_key_never_in_url_or_errors(tmp_path):
     with pytest.raises(JellyfinUnavailable) as error:
         JellyfinClient("https://example.test", "tres-secret", opener=responses).libraries()
     assert "tres-secret" not in str(error.value) and "tres-secret" not in responses.requests[0].full_url
+
+
+def test_one_transient_failure_is_retried(tmp_path):
+    from socket import timeout as socket_timeout
+    inv = inventory(tmp_path / "local")
+    responses = Responses({"Items": [item(1, "/music/a.flac")], "TotalRecordCount": 2}, socket_timeout("lent"),
+                          {"Items": [item(2, "/music/b.mp3")], "TotalRecordCount": 2})
+    result = JellyfinClient("https://example.test", "key", opener=responses, page_size=1).diagnose(
+        inv, [PathMapping("/music", inv.root)])
+    assert result.complete and not result.failed
+    assert [finding.status for finding in result.findings] == ["Correspondance", "Correspondance"]
+
+
+def test_truncated_response_is_a_service_error(tmp_path):
+    from http.client import IncompleteRead
+    inv = inventory(tmp_path / "local")
+    result = JellyfinClient("https://example.test", "key", opener=Responses(IncompleteRead(b"{"))).diagnose(inv, [])
+    assert result.failed and "Connexion Jellyfin impossible" in result.reasons[0]
+
+
+def test_catalogue_changed_during_paging_prevents_absence(tmp_path):
+    inv = inventory(tmp_path / "local")
+    responses = Responses({"Items": [item(1, "/music/a.flac")], "TotalRecordCount": 2},
+                          {"Items": [item(3, "/music/c.flac")], "TotalRecordCount": 2},
+                          {"Items": [item(1, "/music/a.flac")], "TotalRecordCount": 3})
+    result = JellyfinClient("https://example.test", "key", opener=responses, page_size=1).diagnose(
+        inv, [PathMapping("/music", inv.root)])
+    assert not result.complete
+    assert "Absent du catalogue" not in [finding.status for finding in result.findings]
+    assert any("a changé pendant la lecture" in reason for reason in result.reasons)
+
+
+@pytest.mark.parametrize("key", ["clé€", "abc\u00a0def", "a b"])
+def test_api_key_with_unexpected_characters_is_rejected_early(key):
+    with pytest.raises(ValueError, match="Recopiez la clé"):
+        JellyfinClient("https://example.test", key)
+
+
+def test_outgoing_symlink_is_ignored_without_blocking_the_diagnosis(tmp_path):
+    outside = tmp_path / "ailleurs.flac"
+    outside.write_bytes(b"audio")
+    inv = inventory(tmp_path / "local", ("a.flac",))
+    try:
+        (tmp_path / "local" / "lien.flac").symlink_to(outside)
+    except OSError:
+        pytest.skip("liens symboliques indisponibles")
+    target, reason = map_server_path("/music/lien.flac", [PathMapping("/music", inv.root)])
+    assert target == str(tmp_path / "local" / "lien.flac")
+    target, reason = map_server_path("/music/../ailleurs.flac", [PathMapping("/music", inv.root)])
+    assert target is None

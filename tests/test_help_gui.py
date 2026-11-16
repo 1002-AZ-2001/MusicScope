@@ -95,6 +95,11 @@ def test_startup_message_says_inventory_comes_from_cache(tmp_path, app):
                                        scanned_at="2026-11-09T20:00:00+00:00"))
     window = MainWindow(cache_dir)
     try:
+        import time
+        deadline = time.monotonic() + 10
+        while (window.task is not None or "chargé" not in window.state.text()) and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
         message = window.state.text()
         assert "09/11/2026" in message and "1 albums" in message and "seuls les fichiers modifiés" in message
     finally:

@@ -88,8 +88,8 @@ class Cache:
         ).fetchone()
         if row:
             try:
-                return Track(**json.loads(row[0]))
-            except (ValueError, TypeError):
+                return Track.from_dict(json.loads(row[0]))
+            except (ValueError, TypeError, AttributeError):
                 return None
         return None
 
@@ -115,11 +115,15 @@ class Cache:
         )
 
     def save_inventory(self, inventory: Inventory) -> None:
+        data = inventory.to_dict()
+        try:
+            body = json.dumps(data, ensure_ascii=False)
+            body.encode("utf-8")
+        except UnicodeEncodeError:
+            # Chemin aux octets non UTF-8 (fichier signalé illisible) : échappé pour SQLite.
+            body = json.dumps(data, ensure_ascii=True)
         with self.connection:
-            self.connection.execute(
-                "INSERT OR REPLACE INTO inventories VALUES (?, ?)",
-                (inventory.root, json.dumps(inventory.to_dict(), ensure_ascii=False)),
-            )
+            self.connection.execute("INSERT OR REPLACE INTO inventories VALUES (?, ?)", (inventory.root, body))
 
     def prune_missing(self, root: str | Path, present: set[str]) -> int:
         """Retire les tags et hachages des fichiers disparus sous `root`.
@@ -153,7 +157,12 @@ class Cache:
         row = self.connection.execute(
             "SELECT body FROM inventories WHERE root=?", (str(Path(root).absolute()),)
         ).fetchone()
-        return Inventory.from_dict(json.loads(row[0])) if row else None
+        if not row:
+            return None
+        try:
+            return Inventory.from_dict(json.loads(row[0]))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return None  # inventaire illisible : traité comme absent, remplacé au prochain scan
 
     def hash_track(self, track: Track, cancel: Event | None = None) -> str:
         """SHA-256 en flux ; refuse un fichier modifié depuis l'inventaire."""

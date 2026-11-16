@@ -138,7 +138,7 @@ class FileDuplicatesPage(QWidget):
         actions.addWidget(self.summary, 1)
         layout.addLayout(actions)
         window.buttons += [self.search_button, self.quarantine_button, self.restore_button, self.empty_button,
-                           self.links_button]
+                           self.links_button, self.selection_button]
 
     # Recherche
     def options(self) -> fd.ScanOptions:

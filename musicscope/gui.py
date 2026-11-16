@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QSortFilterProxyModel, Qt, QThread, QUrl, Signal, Slot, qVersion
+from PySide6.QtCore import QByteArray, QSortFilterProxyModel, Qt, QThread, QTimer, QUrl, Signal, Slot, qVersion
 from PySide6.QtGui import (
     QAction, QColor, QDesktopServices, QIcon, QKeySequence, QPalette, QPixmap, QShortcut, QStandardItem,
     QStandardItemModel,
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 
 from .audit import audit_album
-from .cache import Cache
+from .cache import Cache, check_cancel
 from .comparison import (
     DISTINCT, IDENTICAL, MATCHING, PHYSICAL, PROBABLE, candidates, compare_albums, exact_file_groups,
 )
@@ -525,6 +525,8 @@ class MainWindow(QMainWindow):
             (None, None, None),
             ("Quitter", self.close, QKeySequence.StandardKey.Quit),
         ]
+        # Actions qui lancent une tâche ou changent la racine : inactives pendant une tâche.
+        self.task_actions = []
         for title, callback, shortcut in entries:
             if title is None:
                 self.file_menu.addSeparator()
@@ -533,6 +535,8 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.triggered.connect(lambda checked=False, callback=callback: callback())
             self.file_menu.addAction(action)
+            if callback is not self.close:
+                self.task_actions.append(action)
 
     def _rebuild_view_menu(self):
         self.view_menu.clear()
@@ -629,21 +633,44 @@ class MainWindow(QMainWindow):
             self.root = json.loads((self.cache_dir / "preferences.json").read_text("utf-8"))["root"]
             check_cache_outside_library(self.cache_dir, Path(self.root))
             self.root_label.setText(self.root)
-            cache = Cache(self.cache_dir / "inventory.sqlite3")
-            try:
-                saved = cache.load_inventory(self.root)
-            finally:
-                cache.close()
-            if saved:
-                self.display_inventory(saved)
-                when = format_scan_date(saved.scanned_at)
-                self.state.setText(f"Inventaire du {when} chargé depuis le cache ({len(saved.albums)} albums), "
-                                   "sans relire les fichiers. Relancez l’analyse pour actualiser : "
-                                   "seuls les fichiers modifiés seront relus.")
         except (OSError, ValueError, KeyError):
             self.root = ""
+            return
+        # Chargé après l'affichage de la fenêtre, hors du fil Qt : un gros inventaire prend
+        # plusieurs secondes, et les rapprochements sont recalculés comme après un scan.
+        QTimer.singleShot(0, self.load_cached_inventory)
+
+    def load_cached_inventory(self):
+        if self.task is not None or not self.root or self.inventory.albums:
+            return
+        root = self.root
+
+        def operation(cancel, progress):
+            with Cache(self.cache_dir / "inventory.sqlite3") as cache:
+                saved = cache.load_inventory(root)
+            if not saved:
+                return None
+            check_cancel(cancel)
+            progress(0, 0, "Recherche des rapprochements…")
+            return saved, [(a, b, compare_albums(a, b)) for a, b in candidates(saved.albums)]
+
+        def done(result):
+            if result is None or root != self.root:
+                self.state.setText("Prêt. Lancez l’analyse pour inventorier la médiathèque.")
+                return
+            saved, pairs = result
+            self.display_inventory(saved, pairs)
+            when = format_scan_date(saved.scanned_at)
+            self.state.setText(f"Inventaire du {when} chargé depuis le cache ({len(saved.albums)} albums), "
+                               "sans relire les fichiers. Relancez l’analyse pour actualiser : "
+                               "seuls les fichiers modifiés seront relus.")
+
+        self.run_task("Chargement de l’inventaire enregistré…", operation, done)
 
     def choose_root(self):
+        if self.task is not None:
+            self.state.setText("Une opération est en cours : attendez sa fin (ou annulez-la) avant de changer de dossier.")
+            return
         root = QFileDialog.getExistingDirectory(self, "Racine de la médiathèque", self.root)
         if not root:
             return
@@ -658,10 +685,13 @@ class MainWindow(QMainWindow):
 
     def run_task(self, label, operation, on_result, cancellable=True):
         if self.task is not None:
+            self.state.setText("Une opération est déjà en cours : attendez sa fin avant d’en lancer une autre.")
             return
         self.state.setText(label)
         for button in self.buttons:
             button.setEnabled(False)
+        for action in getattr(self, "task_actions", []):
+            action.setEnabled(False)
         self.progress_bar.setRange(0, 0)
         self.cancel_button.setEnabled(cancellable)
         task = Task(operation, self)
@@ -690,7 +720,8 @@ class MainWindow(QMainWindow):
         self.state.setText(f"{current}/{total} — {path}")
 
     def cancel_task(self):
-        if self.task:
+        # Échap ne doit pas interrompre une opération déclarée non annulable (bouton grisé).
+        if self.task and self.cancel_button.isEnabled():
             self.task.cancel.set()
             self.state.setText("Annulation demandée ; attente de la fin de lecture en cours…")
             self.cancel_button.setEnabled(False)
@@ -706,6 +737,8 @@ class MainWindow(QMainWindow):
         task.deleteLater()
         for button in self.buttons:
             button.setEnabled(True)
+        for action in getattr(self, "task_actions", []):
+            action.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)

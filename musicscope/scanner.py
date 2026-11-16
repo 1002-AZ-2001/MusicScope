@@ -64,6 +64,7 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
         raise ScanUnavailable(f"Racine inaccessible ou lien ignoré : {root}")
     found: list[tuple[Path, os.stat_result]] = []
     traversal_errors: list[str] = []
+    skipped: list[str] = []
     pending = [root]
     while pending:
         check_cancel(cancel)
@@ -76,13 +77,27 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
                     if is_link(path) or (directory == root and entry.name == QUARANTINE_DIR):
                         continue
                     try:
-                        info = entry.stat(follow_symlinks=False)
-                        if stat_module.S_ISDIR(info.st_mode):
+                        if entry.is_dir(follow_symlinks=False):
                             pending.append(path)
-                        elif stat_module.S_ISREG(info.st_mode) and path.suffix.casefold() in AUDIO_EXTENSIONS:
+                            continue
+                        if path.suffix.casefold() not in AUDIO_EXTENSIONS:
+                            continue  # pochettes, .nfo, .part… : jamais lus, leurs erreurs sont sans effet
+                        info = entry.stat(follow_symlinks=False)
+                        if stat_module.S_ISREG(info.st_mode):
                             found.append((path, info))
+                    except FileNotFoundError:
+                        continue  # disparu entre la lecture du dossier et son examen (fichier temporaire)
                     except OSError as exc:
                         traversal_errors.append(f"{path} : {exc}")
+        except PermissionError as exc:
+            if directory == root:
+                traversal_errors.append(f"{directory} : {exc}")
+            else:
+                # Dossier interdit (ex. @eaDir d'un NAS) : signalé, sans perdre le reste du scan.
+                skipped.append(f"Dossier illisible ignoré : {directory} : {exc}")
+        except FileNotFoundError:
+            if directory == root:
+                traversal_errors.append(f"{directory} : racine disparue")
         except OSError as exc:
             traversal_errors.append(f"{directory} : {exc}")
         if progress:
@@ -91,6 +106,7 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
         raise ScanUnavailable("Parcours incomplet ; inventaire précédent conservé.\n" + "\n".join(traversal_errors))
 
     inventory = Inventory(str(root), scanned_at=datetime.now(timezone.utc).isoformat())
+    inventory.errors.extend(skipped)
     albums: dict[Path, Album] = {}
     grouped_folders: dict[Path, set[Path]] = {}
     mounts = MountCache()
@@ -115,12 +131,14 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
         raise ScanUnavailable("Source inaccessible ou modifiée pendant l'analyse ; inventaire précédent conservé.\n"
                               + "\n".join(inventory.errors))
     # A vanished/unmounted tree can appear empty rather than raise an I/O error.
-    previous = cache.load_inventory(root)
+    previous = cache.load_inventory(root) if not found else None
     if not found and previous and previous.albums:
         raise ScanUnavailable("La racine est vide alors qu'un inventaire existe ; vérifier le montage. Inventaire précédent conservé.")
     cache.save_inventory(inventory)
-    # Parcours complet et stable : les entrées des fichiers disparus sont inutiles.
-    cache.prune_missing(root, {str(path) for path, _ in found})
+    # Parcours complet et stable : les entrées des fichiers disparus sont inutiles. Un dossier
+    # illisible a pu masquer des fichiers encore présents : rien n'est purgé dans ce cas.
+    if not skipped:
+        cache.prune_missing(root, {str(path) for path, _ in found})
     return inventory
 
 
@@ -232,7 +250,12 @@ def _read_tracks(root: Path, found: list[tuple[Path, os.stat_result]], cache: Ca
             current = currents[index]
             if current is None:
                 continue
-            track = cache.get_track(path, current)
+            try:
+                track = cache.get_track(path, current)
+            except UnicodeEncodeError:
+                # Nom de fichier non UTF-8 (octets invalides) : illisible pour le cache, signalé seul.
+                outcomes[index] = ValueError("Nom de fichier non UTF-8 : renommez-le pour l’analyser")
+                continue
             if track is None:
                 misses.append(index)
             else:

@@ -1,4 +1,19 @@
-# Validation — MusicScope 0.10.1
+# Validation — MusicScope 0.10.2
+
+## Version 0.10.2 — robustesse
+
+Deuxième lot de l'audit. Tests ajoutés (`tests/test_robustness.py`, nouveaux tests de `test_scanner.py` et `test_jellyfin.py`) ; sur la v0.10.1, 15 échouent, les tests Jellyfin ne s'exécutent pas, et deux tests d'interface y restent bloqués (boîte modale ou recherche jamais lancée) :
+
+- scan : erreur inattendue de décodage (IndexError de mutagen) et atome MP4 `trkn` vide limitées au fichier ; nom non UTF-8 signalé seul ; fichier temporaire disparu pendant la découverte ignoré ; dossier interdit (ex. `@eaDir`) signalé sans annuler le scan ni purger le cache ; racine vide toujours refusée ;
+- inventaire écrit par une autre version (champ inconnu) ou JSON abîmé : plus de blocage des scans ;
+- base `review.sqlite3` ou `tags.sqlite3` corrompue : la fenêtre s'ouvre avec un message qui nomme le fichier ;
+- démarrage : fenêtre affichée avant le chargement de l'inventaire en cache (tâche de fond), rapprochements et albums en double recalculés ;
+- interface : recherche SHA-256 lancée après « Oui » même si l'estimation est déjà terminée ; menu Fichier, Jellyfin et « Sélection » inactifs pendant une tâche ; Échap sans effet sur une tâche non annulable ; export CSV sans préfixe cumulé ;
+- fichiers en double : un fichier que fpcalc ne décode pas est ignoré sans arrêter la recherche ; inode inconnu (0, Windows) jamais fusionné ;
+- Jellyfin : tri explicite (`SortBy=DateCreated,SortName`), total relu en fin de lecture, trois tentatives sur coupure, délai, `IncompleteRead`, HTTP 429/5xx (jamais sur 401/403/404), clé API à caractère inattendu refusée avec un message clair, lien symbolique sortant classé « Lien local ignoré » ; `IncompleteRead` traité aussi pour MusicBrainz, AcoustID et les pochettes ;
+- session : JSON compact, limite portée à 512 Mio (96 585 pistes ≈ 81 Mio).
+
+**443 tests** passent sous Python 3.12 et 3.13. Non essayé : votre NAS et votre serveur Jellyfin réels.
 
 ## Version 0.10.1 — protection des données
 

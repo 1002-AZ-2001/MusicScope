@@ -112,9 +112,57 @@ def test_directory_error_preserves_snapshot(source, cache, monkeypatch):
         return original(path)
 
     monkeypatch.setattr("musicscope.scanner.os.scandir", denied)
-    with pytest.raises(ScanUnavailable, match="denied"):
+    # Le seul dossier d'album est interdit : la racine paraît vide, l'inventaire est conservé.
+    with pytest.raises(ScanUnavailable, match="vide"):
         scan(source, cache)
     assert cache.load_inventory(source).to_dict() == previous
+
+
+def test_forbidden_subfolder_is_reported_without_losing_the_scan(source, cache, monkeypatch):
+    audio(source / "Album" / "01.flac")
+    audio(source / "@eaDir" / "01.flac")
+    monkeypatch.setattr("musicscope.scanner.read_track", reader)
+    scan(source, cache)
+    original = os.scandir
+
+    def denied(path):
+        if Path(path).name == "@eaDir":
+            raise PermissionError("denied")
+        return original(path)
+
+    monkeypatch.setattr("musicscope.scanner.os.scandir", denied)
+    inventory = scan(source, cache)
+    assert [Path(album.path).name for album in inventory.albums] == ["Album"]
+    assert any("Dossier illisible ignoré" in error and "@eaDir" in error for error in inventory.errors)
+    # Rien n'est purgé : les entrées du dossier masqué restent en cache.
+    assert cache.get_track(source / "@eaDir" / "01.flac", (source / "@eaDir" / "01.flac").stat()) is not None
+
+
+def test_vanished_temporary_file_does_not_abort_discovery(source, cache, monkeypatch):
+    audio(source / "Album" / "01.flac")
+    (source / "Album" / "cover.jpg.part").write_bytes(b"x")
+    monkeypatch.setattr("musicscope.scanner.read_track", reader)
+    original = os.scandir
+
+    class Racing:
+        def __init__(self, path):
+            self.iterator = original(path)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.iterator.close()
+
+        def __iter__(self):
+            for entry in self.iterator:
+                if entry.name.endswith(".part"):
+                    os.remove(entry.path)  # supprimé par qBittorrent entre la lecture du dossier et son examen
+                yield entry
+
+    monkeypatch.setattr("musicscope.scanner.os.scandir", Racing)
+    inventory = scan(source, cache)
+    assert len(inventory.albums) == 1 and not inventory.errors
 
 
 def test_symlinks_not_followed(source, cache, monkeypatch, tmp_path):

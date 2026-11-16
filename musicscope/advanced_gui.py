@@ -166,9 +166,20 @@ class AdvancedWindow(MainWindow):
         self._build_extended_tabs()
         self._build_menus()
         self.extensions_ready = True
-        self.refresh_reviews()
-        self.refresh_tag_journal()
+        self._guard_store(self.refresh_reviews, "review.sqlite3")
+        self._guard_store(self.refresh_tag_journal, "tags.sqlite3")
         self.refresh_duplicates()
+
+    def _guard_store(self, refresh, name):
+        """Une base locale corrompue (coupure, disque plein) ne doit pas empêcher le démarrage."""
+        import sqlite3
+        try:
+            refresh()
+        except sqlite3.Error as exc:
+            self.show_error(f"Base locale illisible : {self.cache_dir / name} ({exc}). Pour repartir d’une base "
+                            "vide, fermez MusicScope puis renommez ou supprimez ce fichier"
+                            + (" (le journal des tags, donc leur annulation, sera perdu)." if name == "tags.sqlite3"
+                               else " (vos décisions de revue seront perdues)."))
 
     def _build_extended_tabs(self):
         self.jellyfin_table, self.jellyfin_model, self.jellyfin_proxy = make_table(
@@ -187,6 +198,7 @@ class AdvancedWindow(MainWindow):
         self.jellyfin_button = QPushButton("Configurer et lancer…")
         self.jellyfin_button.clicked.connect(lambda: self.start_jellyfin())
         jellyfin_bar.addWidget(self.jellyfin_button)
+        self.buttons.append(self.jellyfin_button)
         jellyfin_layout.addLayout(jellyfin_bar)
         jellyfin_layout.addWidget(self.jellyfin_table, 1)
         self.jellyfin_index = self.add_page(jellyfin_page, "Jellyfin", "Services")
@@ -357,6 +369,19 @@ class AdvancedWindow(MainWindow):
         if callback is not None:
             QTimer.singleShot(0, callback)
 
+    def _mark_summary_stale(self):
+        text = self.summary.text()
+        if not text.startswith("INVENTAIRE À ACTUALISER — "):
+            self.summary.setText("INVENTAIRE À ACTUALISER — " + text)
+
+    def _start_after_task(self, callback):
+        """Lance `callback` après la tâche en cours, ou tout de suite s'il n'y en a plus : une boîte
+        de dialogue ouverte dans un callback laisse la tâche se terminer avant la réponse."""
+        if self.task is not None:
+            self._after_task = callback
+        else:
+            QTimer.singleShot(0, callback)
+
     def _fresh(self):
         if self.historical or self.requires_rescan:
             self.state.setText("Inventaire à actualiser : relancez l’analyse avant de comparer les fichiers ou d’effectuer une action.")
@@ -387,7 +412,7 @@ class AdvancedWindow(MainWindow):
             self.jellyfin_model.removeRows(0, self.jellyfin_model.rowCount())
             self.set_page_count(self.jellyfin_index, None)
             self.refresh_duplicates()
-            self.refresh_reviews()
+            self._guard_store(self.refresh_reviews, "review.sqlite3")
 
     def refresh_reviews(self):
         from .review import ReviewStore, quality_findings
@@ -473,7 +498,7 @@ class AdvancedWindow(MainWindow):
                 f"Lecture estimée hors cache : {byte_label(cost.uncached_bytes)}\n\n"
                 "Les hachages déjà validés seront réutilisés. Lancer la recherche ?")
             if answer == QMessageBox.StandardButton.Yes:
-                self._after_task = lambda: super(AdvancedWindow, self).start_exact()
+                self._start_after_task(lambda: super(AdvancedWindow, self).start_exact())
         self.run_task("Estimation du volume de lecture…", operation, done)
 
     def record_decision(self, decision=None, note=None):
@@ -1090,7 +1115,7 @@ class AdvancedWindow(MainWindow):
         def done(journal):
             self.pending_plan = None
             self.requires_rescan = True
-            self.summary.setText("INVENTAIRE À ACTUALISER — " + self.summary.text())
+            self._mark_summary_stale()
             self.organizer_details.append(f"<h3>Déplacement terminé</h3><p>Journal : {escaped(journal)}</p>"
                 "<p>Relancez l’analyse pour actualiser les chemins. Le menu Rangement permet de restaurer ce journal.</p>")
             self.state.setText(f"Déplacement terminé. Journal : {journal}. Relancez l’analyse.")
@@ -1128,7 +1153,7 @@ class AdvancedWindow(MainWindow):
         def done(journal):
             self.pending_plan = None
             self.requires_rescan = True
-            self.summary.setText("INVENTAIRE À ACTUALISER — " + self.summary.text())
+            self._mark_summary_stale()
             self.organizer_details.append(f"<h3>Restauration terminée</h3><p>{escaped(journal)}</p><p>Relancez l’analyse.</p>")
             self.tabs.setCurrentIndex(self.organizer_index)
             self.state.setText("Restauration terminée. Relancez l’analyse pour actualiser l’inventaire.")
@@ -1204,7 +1229,7 @@ class AdvancedWindow(MainWindow):
 
     def findings(self):
         rows = super().findings()
-        rows.extend(self.additional_findings)
+        rows.extend(dict(row) for row in self.additional_findings)  # copies : l'export ne modifie rien
         if self.jellyfin_result is not None:
             for finding in self.jellyfin_result.findings:
                 rows.append({"catégorie": "Jellyfin", "dossier": finding.local_path,
@@ -1218,6 +1243,6 @@ class AdvancedWindow(MainWindow):
                 rows.append({"catégorie": "Décision", "dossier": decision["left_path"], "autre_dossier": decision["right_path"],
                     "statut": decision["decision"], "motif": decision.get("note", "")})
         if self.historical or self.requires_rescan:
-            for row in rows:
-                row["statut"] = ("Historique — " if self.historical else "À actualiser — ") + row.get("statut", "")
+            prefix = "Historique — " if self.historical else "À actualiser — "
+            rows = [{**row, "statut": prefix + row.get("statut", "")} for row in rows]
         return rows
