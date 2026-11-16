@@ -15,6 +15,12 @@ class Track:
     device: int | None = None
     inode: int | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict) -> Track:
+        """Ignore les champs inconnus : un inventaire écrit par une autre version reste lisible."""
+        known = {name for name in cls.__dataclass_fields__}
+        return cls(**{key: value for key, value in data.items() if key in known})
+
     def value(self, key: str) -> str:
         return "; ".join(self.tags.get(key, []))
 
@@ -75,5 +81,5 @@ class Inventory:
                    scanned_at=data.get("scanned_at", ""), albums=[
                        Album(path=a["path"], complete=a.get("complete", True),
                              issues=a.get("issues", []),
-                             tracks=[Track(**t) for t in a["tracks"]])
+                             tracks=[Track.from_dict(t) for t in a["tracks"]])
                        for a in data.get("albums", [])])

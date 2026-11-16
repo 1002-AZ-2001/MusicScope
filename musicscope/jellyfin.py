@@ -6,11 +6,13 @@ chemin serveur non résolu ne devient jamais une preuve d'absence du catalogue.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
@@ -113,7 +115,10 @@ def map_server_path(server_path: str, mappings: list[PathMapping]) -> tuple[str 
         suffix = original[len(normalized):]
         target = local.joinpath(*suffix)
         try:
-            if not target.resolve().is_relative_to(local.resolve()):
+            # Seul le dossier parent est résolu : un lien symbolique en dernier composant est
+            # ensuite classé « Lien local ignoré », sans bloquer tout le diagnostic.
+            checked = target.parent if suffix else target
+            if not checked.resolve().is_relative_to(local.resolve()):
                 return None, "La correspondance sortirait du dossier local configuré."
         except (OSError, RuntimeError, ValueError):
             return None, "La destination locale ne peut pas être résolue."
@@ -158,6 +163,9 @@ class JellyfinClient:
             raise ValueError("Port Jellyfin invalide.") from exc
         if not api_key.strip() or any(character in api_key for character in "\r\n\",\\"):
             raise ValueError("Une clé API Jellyfin valide est requise.")
+        if not re.fullmatch(r"[\x21-\x7e]+", api_key.strip()):
+            # Les clés Jellyfin sont hexadécimales : un accent ou un espace insécable vient d'un mauvais copier-coller.
+            raise ValueError("Clé API Jellyfin invalide : caractère inattendu (espace, accent…). Recopiez la clé.")
         if library_id and not re.fullmatch(r"[A-Za-z0-9-]{1,64}", library_id):
             raise ValueError("Identifiant de bibliothèque Jellyfin invalide.")
         self.library_id = library_id
@@ -167,6 +175,7 @@ class JellyfinClient:
         self._api_key = api_key.strip()
         self.opener = build_opener(_SameOriginRedirect()).open if opener is urlopen else opener
         self.page_size, self.max_pages = page_size, max_pages
+        self.attempts, self.timeout, self._sleep = 3, 20, time.sleep
 
     def _headers(self, authenticated: bool = True) -> dict[str, str]:
         from . import __version__
@@ -182,18 +191,28 @@ class JellyfinClient:
              max_bytes: int = 16 * 1024 * 1024):
         url = urljoin(self.server_url, path) + ("?" + urlencode(query) if query else "")
         request = Request(url, headers=self._headers(authenticated), method="GET")
-        try:
-            with self.opener(request, timeout=20) as response:
-                body = response.read(max_bytes + 1)
-            if len(body) > max_bytes:
-                raise JellyfinUnavailable("Réponse Jellyfin trop volumineuse.")
-            return json.loads(body)
-        except HTTPError as exc:
-            raise JellyfinUnavailable(HTTP_HINTS.get(exc.code, f"Jellyfin indisponible (HTTP {exc.code}).")) from exc
-        except (URLError, OSError, TimeoutError) as exc:
-            raise JellyfinUnavailable("Connexion Jellyfin impossible : vérifiez l'adresse, le port et le réseau.") from exc
-        except (ValueError, UnicodeError) as exc:
-            raise JellyfinUnavailable("Réponse Jellyfin illisible : l'adresse désigne-t-elle bien Jellyfin ?") from exc
+        for attempt in range(self.attempts):
+            try:
+                with self.opener(request, timeout=self.timeout) as response:
+                    body = response.read(max_bytes + 1)
+                if len(body) > max_bytes:
+                    raise JellyfinUnavailable("Réponse Jellyfin trop volumineuse.")
+                return json.loads(body)
+            except HTTPError as exc:
+                # 429 et 5xx peuvent être passagers ; 401/403/404 non.
+                if (exc.code == 429 or exc.code >= 500) and attempt + 1 < self.attempts:
+                    self._sleep(2 ** attempt)
+                    continue
+                raise JellyfinUnavailable(HTTP_HINTS.get(exc.code, f"Jellyfin indisponible (HTTP {exc.code}).")) from exc
+            except (URLError, OSError, TimeoutError, HTTPException) as exc:
+                # Coupure ponctuelle (délai, réponse tronquée) : quelques nouvelles tentatives.
+                if attempt + 1 < self.attempts:
+                    self._sleep(2 ** attempt)
+                    continue
+                raise JellyfinUnavailable("Connexion Jellyfin impossible : vérifiez l'adresse, le port et le réseau.") from exc
+            except (ValueError, UnicodeError) as exc:
+                raise JellyfinUnavailable("Réponse Jellyfin illisible : l'adresse désigne-t-elle bien Jellyfin ?") from exc
+        raise JellyfinUnavailable("Connexion Jellyfin impossible.")
 
     def server_info(self) -> ServerInfo:
         """Nom et version, sans clé ; puis un appel authentifié pour valider la clé."""
@@ -223,7 +242,9 @@ class JellyfinClient:
         return result
 
     def _page(self, start: int) -> dict:
+        # Ordre explicite et stable : sans lui, la pagination par StartIndex peut sauter ou répéter des éléments.
         query = {"IncludeItemTypes": "Audio", "Recursive": "true", "Fields": "Path",
+                 "SortBy": "DateCreated,SortName", "SortOrder": "Ascending",
                  "StartIndex": start, "Limit": self.page_size, "EnableTotalRecordCount": "true"}
         if self.library_id:
             query["ParentId"] = self.library_id
@@ -278,8 +299,15 @@ class JellyfinClient:
                     break
             else:
                 raise JellyfinUnavailable("Limite de pagination Jellyfin atteinte ; diagnostic incomplet.")
+            if result.complete and expected_total is not None and len(items) > self.page_size:
+                # Total relu en fin de lecture : un ajout ou une suppression pendant la pagination
+                # peut décaler les pages ; aucune absence n'est alors conclue.
+                final = self._page(0).get("TotalRecordCount")
+                if final is not None and final != expected_total:
+                    result.complete = False
+                    raise JellyfinUnavailable("Le catalogue Jellyfin a changé pendant la lecture ; relancer le diagnostic.")
         except JellyfinUnavailable as exc:
-            result.reasons.append(str(exc))
+            result.reasons.append(str(exc) if not items else f"Interruption après {len(items)} élément(s) lus : {exc}")
             if not items:
                 # Rien n'a été lu : aucune comparaison n'aurait de sens.
                 result.failed = True

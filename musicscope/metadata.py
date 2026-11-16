@@ -67,6 +67,8 @@ def canonical_tags(native) -> dict[str, list[str]]:
             continue
         if key in {"trkn", "disk"}:
             # MP4: une paire (numéro, total), pas une chaîne de texte.
+            if not raw_value or len(raw_value[0]) != 2:
+                continue  # atome vide ou malformé
             number, total = raw_value[0]
             prefix = "track" if key == "trkn" else "disc"
             if number:
@@ -96,6 +98,17 @@ def canonical_tags(native) -> dict[str, list[str]]:
 
 
 def read_track(path: Path, stat: os.stat_result | None = None) -> Track:
+    """Une erreur inattendue de décodage (fichier tronqué, atome malformé) est convertie en
+    ValueError : elle marque ce fichier illisible sans interrompre tout le scan."""
+    try:
+        return _read_track(path, stat)
+    except (OSError, ValueError):
+        raise
+    except Exception as exc:  # mutagen lève parfois IndexError, KeyError, struct.error…
+        raise ValueError(f"Fichier audio corrompu ({type(exc).__name__}) : {exc}") from exc
+
+
+def _read_track(path: Path, stat: os.stat_result | None = None) -> Track:
     path = Path(path)
     stat = stat or path.stat(follow_symlinks=False)
     try:

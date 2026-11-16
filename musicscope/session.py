@@ -15,7 +15,8 @@ from .models import Inventory, Track
 from .review import DECISIONS, RULES_VERSION
 
 SCHEMA_VERSION = 1
-MAX_SESSION_BYTES = 64 * 1024 * 1024
+# JSON compact : environ 1 Kio par piste ; 512 Mio couvrent MAX_TRACKS (96 585 pistes ≈ 81 Mio).
+MAX_SESSION_BYTES = 512 * 1024 * 1024
 MAX_TRACKS = 500000
 
 
@@ -210,7 +211,7 @@ def export_session(path: str | Path, inventory: Inventory, matches=(), exact_gro
                                  "original_paths": source_session.original_paths,
                                  "path_mappings": [list(mapping) for mapping in source_session.path_mappings]}
     _validate(payload)
-    encoded = json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
     if len(encoded) > MAX_SESSION_BYTES:
         raise ValueError("Session trop volumineuse pour être exportée.")
     target = Path(path)

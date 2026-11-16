@@ -6,6 +6,7 @@ jamais appliquée aux tags. Une liste de pistes ne suffit pas à départager deu
 """
 from __future__ import annotations
 
+from http.client import HTTPException  # IncompleteRead, BadStatusLine : réponse coupée
 import json
 import math
 import re
@@ -367,7 +368,7 @@ class MusicBrainzClient:
                     if delay > 10:
                         raise ServiceUnavailable("MusicBrainz demande de réessayer plus tard.") from error
                     self.sleep(max(1, delay))
-                except (URLError, TimeoutError, OSError) as error:
+                except (URLError, TimeoutError, OSError, HTTPException) as error:
                     if attempt == 2:
                         raise ServiceUnavailable("MusicBrainz inaccessible (réseau ou délai dépassé).") from error
                     self.sleep(2 ** attempt)

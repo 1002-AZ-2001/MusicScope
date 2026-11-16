@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from http.client import HTTPException  # IncompleteRead, BadStatusLine : réponse coupée
 import hashlib
 import json
 import math
@@ -238,7 +239,7 @@ def _read_url(url, opener=urlopen, max_bytes=8 * 1024 * 1024):
             if not math.isfinite(delay) or delay > 10:
                 raise ServiceUnavailable("Le service demande de réessayer plus tard.") from exc
             time.sleep(max(1, delay))
-        except (URLError, TimeoutError, OSError) as exc:
+        except (URLError, TimeoutError, OSError, HTTPException) as exc:
             if attempt == 2:
                 raise ServiceUnavailable("Service distant inaccessible ou délai dépassé.") from exc
             time.sleep(2 ** attempt)
