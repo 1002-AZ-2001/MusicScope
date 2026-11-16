@@ -382,6 +382,8 @@ class AdvancedWindow(MainWindow):
         self.current_decisions = []
         if self.extensions_ready:
             self.apply_action.setEnabled(False)
+            # Nouvel inventaire : les groupes de fichiers affichés datent de l'ancien.
+            self.file_duplicates_page.invalidate("Inventaire actualisé : relancez la recherche des fichiers en double.")
             self.jellyfin_model.removeRows(0, self.jellyfin_model.rowCount())
             self.set_page_count(self.jellyfin_index, None)
             self.refresh_duplicates()
@@ -587,11 +589,12 @@ class AdvancedWindow(MainWindow):
             if not selected:
                 return
             tracks = selected[0].ordered_tracks
-            labels = [f"{t.disc}.{t.number_in_disc} — {t.value('title')} — {Path(t.path).name}" for t in tracks]
+            labels = [f"{position}. {t.disc}.{t.number_in_disc} — {t.value('title')} — {Path(t.path).name}"
+                      for position, t in enumerate(tracks, 1)]
             if not labels:
                 return
             label, accepted = QInputDialog.getItem(self, "Empreinte audio", "Choisir une piste", labels, 0, False)
-            if not accepted:
+            if not accepted or label not in labels:
                 return
             track = tracks[labels.index(label)]
         if api_key is None:
@@ -758,6 +761,9 @@ class AdvancedWindow(MainWindow):
         self.refresh_tag_journal(select=result.batch_id)
         self.tabs.setCurrentIndex(self.tags_index)
         message = f"Tags {verb} pour {len(result.written)} fichier(s)."
+        if getattr(result, "cancelled", False):
+            message = (f"Opération interrompue à votre demande : tags {verb} pour {len(result.written)} fichier(s) "
+                       "avant l’arrêt ; les autres n’ont pas été modifiés (voir le journal des tags).")
         if result.failed:
             message += f" {len(result.failed)} échec(s) : " + " | ".join(
                 f"{Path(path).name} : {error}" for path, error in result.failed)
@@ -917,6 +923,12 @@ class AdvancedWindow(MainWindow):
                          f"<span style='color:#ff9e80'>{escaped(', '.join(score.weaknesses))}</span></p>")
         self.duplicate_details.setHtml("".join(lines))
 
+    def _relative(self, path):
+        root = (self.root or "").rstrip("/\\")
+        if root and path.startswith(root) and path[len(root):len(root) + 1] in ("/", "\\"):
+            return path[len(root) + 1:]
+        return path
+
     def choose_kept_copy(self, group_index=None, keep=None):
         selected = self._selected_groups()
         if group_index is None:
@@ -927,11 +939,13 @@ class AdvancedWindow(MainWindow):
             group_index = selected[0]
         group = self.duplicate_groups[group_index]
         if keep is None:
-            labels = [f"{Path(album.path).name} — {len(album.tracks)} pistes — {', '.join(score.strengths) or 'aucun atout'}"
-                      for album, score in zip(group.albums, group.scores)]
+            # Chemin relatif complet et numéro : deux copies au même nom de dossier restent distinctes.
+            labels = [f"{position}. {self._relative(album.path)} — {len(album.tracks)} pistes — "
+                      f"{', '.join(score.strengths) or 'aucun atout'}"
+                      for position, (album, score) in enumerate(zip(group.albums, group.scores), 1)]
             label, accepted = QInputDialog.getItem(self, "Copie à garder", "Garder cette copie ; les autres iront en "
                                                    "quarantaine", labels, group.keep or 0, False)
-            if not accepted:
+            if not accepted or label not in labels:
                 return
             keep = labels.index(label)
         group.keep = keep
@@ -977,8 +991,11 @@ class AdvancedWindow(MainWindow):
         hardlinked = sum(plan.hardlinked_files for plan in ready)
         size = sum(entry.size for plan in ready for entry in plan.files if entry.kind == "file")
         if confirm is None:
+            listed = "\n".join("• " + self._relative(plan.source) for plan in ready[:10]) + (
+                f"\n… et {len(ready) - 10} autre(s)" if len(ready) > 10 else "")
             confirm = QMessageBox.question(self, "Mettre en quarantaine",
                 f"Déplacer {len(ready)} dossier(s) ({size / 2**20:.1f} Mio) vers :\n{Path(self.root) / QUARANTINE_DIR}\n\n"
+                + listed + "\n\n"
                 + (f"{len(blocked)} autre(s) copie(s) bloquée(s), détail dans la page.\n\n" if blocked else "")
                 + "Si qBittorrent partage encore ces fichiers, le partage sera interrompu.\n"
                 "Un journal par dossier permet de tout restaurer. Rien n’est effacé : videz vous-même la "

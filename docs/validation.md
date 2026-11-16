@@ -1,4 +1,19 @@
-# Validation — MusicScope 0.10.0
+# Validation — MusicScope 0.10.1
+
+## Version 0.10.1 — protection des données
+
+Corrections issues d'un audit multi-agents (scripts de reproduction rejoués avant et après correctif). Tests ajoutés (`tests/test_data_safety.py`, 13 échouent sur la v0.10.0) :
+
+- liste « Fichiers en double » vidée par un nouvel inventaire ; avant tout déplacement, chaque groupe doit garder une copie non cochée encore présente et inchangée sur le disque (scénario reproduit : quarantaine d'albums puis « Garder le meilleur » sur la liste périmée ne laisse plus aucune copie) ;
+- choix de la copie à garder : chemins relatifs complets et numérotés, deux dossiers de même nom restent distincts ;
+- trois copies reliées A≈B≈C avec A et C « éditions distinctes » : groupe « À vérifier », rien de présélectionné ;
+- « Espace récupérable » sans les pistes liées ailleurs (Lidarr, qBittorrent) ;
+- restauration d'album après retrait du lien qBittorrent et avec de nouveaux inodes (montage SMB `noserverino`) ; contenu modifié toujours refusé ;
+- réservation vide laissée par un déplacement ou une restauration interrompus (repli SMB/NFS) retirée à la reprise ; une réservation non vide n'est jamais touchée ;
+- échec après un renommage réussi enregistré « appliqué » avec avertissement, inventaire actualisé ;
+- quarantaine, restauration et écriture de tags annulées : résultat partiel renvoyé, journal fidèle au disque, journal des tags et inventaire actualisés ; annulation d'une écriture de tags en échec possible.
+
+**419 tests** passent sous Python 3.12 et 3.13. Non essayé : un vrai montage SMB/NFS et une interruption réelle (coupure réseau).
 
 ## Version 0.10.0 — Jellyfin
 

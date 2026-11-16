@@ -165,6 +165,34 @@ def _fingerprint(entries: list[FileEntry]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _content_fingerprint(entries: list[FileEntry]) -> str:
+    """Contenu seul (chemins relatifs, types, tailles, SHA-256) : la restauration ne dépend ni
+    du nombre de liens physiques (qBittorrent a pu retirer le sien), ni des inodes (un partage
+    SMB monté sans « serverino » peut en attribuer de nouveaux)."""
+    payload = json.dumps([[entry.relative_path, entry.kind, entry.size, entry.sha256] for entry in entries],
+                         ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _remove_reservation(path: Path) -> bool:
+    """Retire une réservation laissée par un déplacement interrompu (repli SMB/NFS) : un dossier
+    vide ou un fichier vide. Rien qui contienne des données n'est supprimé."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISDIR(info.st_mode):
+        try:
+            os.rmdir(path)  # échoue si le dossier n'est pas vide
+        except OSError:
+            return False
+        return True
+    if stat.S_ISREG(info.st_mode) and info.st_size == 0:
+        path.unlink()
+        return True
+    return False
+
+
 def _collision(path: Path) -> bool:
     if path.exists() or path.is_symlink():
         return True
@@ -467,6 +495,16 @@ def apply_plan(plan: MovePlan, journal_dir: str | Path, confirmed: bool = False,
         _save_journal(journal, record)
         return journal
     except (OSError, OrganizeError) as exc:
+        if not os.path.lexists(source) and os.path.lexists(destination):
+            # Le renommage a eu lieu ; seule une étape suivante (vérification, fsync, journal)
+            # a échoué. Le dossier est bien déplacé et reste restaurable par ce journal.
+            record["state"] = "applied"
+            record["error"] = f"Déplacé, mais avec un avertissement : {exc}"
+            try:
+                _save_journal(journal, record)
+            except OSError:
+                pass  # L'intention durable suffit : la restauration se base sur l'existence des chemins.
+            return journal
         record["state"] = "failed"
         record["error"] = str(exc)
         try:
@@ -491,7 +529,7 @@ def restore_journal(journal_path: str | Path, confirmed: bool = False) -> Path:
                 {"intent", "applied", "restoring", "restored", "failed"}):
             raise ValueError("Version ou état de journal inconnu")
         source, destination = _absolute(record["source"]), _absolute(record["destination"])
-        expected = (int(record["source_device"]), int(record["source_inode"]))
+        int(record["source_device"]), int(record["source_inode"])  # format du journal validé
         fingerprint = record["fingerprint"]
         entries = [FileEntry(**entry) for entry in record["files"]]
         if not isinstance(fingerprint, str) or fingerprint != _fingerprint(entries):
@@ -501,10 +539,17 @@ def restore_journal(journal_path: str | Path, confirmed: bool = False) -> Path:
     if source == destination or source.is_relative_to(destination) or destination.is_relative_to(source):
         raise OrganizeError("Relation de chemins invalide dans le journal.")
     _journal_folder(journal.parent, source, destination)
+    content = _content_fingerprint(entries)
     source_exists, destination_exists = source.exists(), destination.exists()
+    if source_exists and destination_exists:
+        # Interruption pendant le repli SMB/NFS : l'un des deux n'est qu'une réservation vide.
+        if record["state"] in {"intent", "failed"} and _remove_reservation(destination):
+            destination_exists = False
+        elif record["state"] == "restoring" and _remove_reservation(source):
+            source_exists = False
     if source_exists and not destination_exists:
         # Renommage non effectué, ou restauration terminée avant l'écriture de l'état.
-        if _fingerprint(_snapshot(source)) != fingerprint:
+        if _content_fingerprint(_snapshot(source)) != content:
             raise OrganizeError("La source existe mais a changé : restauration indéterminée.")
         record["state"] = "restored"
         record["restored_at"] = datetime.now(timezone.utc).isoformat()
@@ -514,18 +559,19 @@ def restore_journal(journal_path: str | Path, confirmed: bool = False) -> Path:
         raise OrganizeError("Restauration bloquée : source occupée ou destination absente ; aucun remplacement autorisé.")
     _check_ancestors(destination)
     _check_ancestors(source.parent, allow_missing=True)
-    if _fingerprint(_snapshot(destination)) != fingerprint:
-        raise OrganizeError("Le dossier déplacé a changé depuis l'opération : restauration automatique refusée.")
+    # Identité lue avant la vérification du contenu, puis exigée au renommage : le dossier
+    # vérifié est bien celui qui est déplacé, même si son inode diffère de celui du journal.
     info = destination.lstat()
-    if (info.st_dev, info.st_ino) != expected:
-        raise OrganizeError("Le dossier déplacé a été remplacé : restauration refusée.")
+    current = (info.st_dev, info.st_ino)
+    if _content_fingerprint(_snapshot(destination)) != content:
+        raise OrganizeError("Le dossier déplacé a changé depuis l'opération : restauration automatique refusée.")
     record["state"] = "restoring"
     _save_journal(journal, record)
     try:
         _mkdir_safe(source.parent)
-        if _fingerprint(_snapshot(destination)) != fingerprint:
+        if _content_fingerprint(_snapshot(destination)) != content:
             raise OrganizeError("Le dossier a changé avant la restauration.")
-        _rename_without_replace(destination, source, expected)
+        _rename_without_replace(destination, source, current)
         record["state"] = "restored"
         record["restored_at"] = datetime.now(timezone.utc).isoformat()
         _save_journal(journal, record)

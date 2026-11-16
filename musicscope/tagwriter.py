@@ -26,7 +26,6 @@ import mutagen
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, ID3NoHeaderError
 
-from .cache import check_cancel
 from .models import Album
 
 # Champs modifiables, identiques pour FLAC, Ogg, Opus (Vorbis), MP3 (ID3) et M4A (MP4).
@@ -61,6 +60,7 @@ class EditResult:
     batch_id: int
     written: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
+    cancelled: bool = False  # arrêt demandé : les fichiers déjà traités restent dans written/failed
 
 
 @dataclass
@@ -202,7 +202,9 @@ class TagJournal:
                                        (self._now(), album_path)).lastrowid
         result = EditResult(batch_id)
         for index, edit in enumerate(edits, 1):
-            check_cancel(cancel)
+            if cancel is not None and cancel.is_set():
+                result.cancelled = True
+                break
             path = Path(edit.path)
             try:
                 if path.is_symlink():
@@ -263,9 +265,12 @@ class TagJournal:
         if row[0]:
             raise ValueError("Cette modification a déjà été annulée")
         result = EditResult(batch_id)
-        entries = [entry for entry in self.entries(batch_id) if entry[3] in {"written", "pending"}]
+        # « failed » : écriture puis restauration en échec, le fichier peut porter les nouvelles valeurs.
+        entries = [entry for entry in self.entries(batch_id) if entry[3] in {"written", "pending", "failed"}]
         for index, (path_text, old, new, status) in enumerate(entries, 1):
-            check_cancel(cancel)
+            if cancel is not None and cancel.is_set():
+                result.cancelled = True
+                break
             path = Path(path_text)
             try:
                 if path.is_symlink():
@@ -287,7 +292,7 @@ class TagJournal:
                 result.written.append(path_text)
             if progress:
                 progress(index, len(entries), path_text)
-        if not result.failed:
+        if not result.failed and not result.cancelled:
             with self.db:
                 self.db.execute("UPDATE tag_batches SET undone_at=? WHERE id=?", (self._now(), batch_id))
         return result
