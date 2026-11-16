@@ -1,4 +1,17 @@
-# Validation — MusicScope 0.10.2
+# Validation — MusicScope 0.11.0
+
+## Version 0.11.0 — éditeur de tags sûr
+
+Troisième lot de l'audit. Tests ajoutés (`tests/test_tag_safety.py`) :
+
+- écriture sur une copie du même dossier (extension non audio, jamais inventoriée), relecture, contrôle des caractéristiques audio, puis remplacement atomique ; une coupure simulée au milieu du décalage de l'audio laisse l'original identique octet pour octet, sans copie oubliée ; droits du fichier conservés ;
+- fichier lié physiquement (qBittorrent, Lidarr) : jamais modifié, exclu de l'aperçu avec avertissement, refus si tous le sont ;
+- MP3 ID3v2.3 : TSOP, TSOA, TSOT, TDRL, TDOR complet et RVA2 (ReplayGain) conservés après écriture et annulation — `EasyID3.save` appelle `update_to_v23()`, qui les supprime ; la documentation de mutagen 1.48 conseille de les retirer puis de les remettre ; valeurs multiples des champs non modifiés gardées séparées ;
+- M4A : total de pistes et de disques gardé quand seul le numéro change, et rétabli par l'annulation ;
+- FLAC/Ogg : la variante « ALBUM ARTIST » est remplacée (plus de valeurs `['Old','New']`), journalisée et rétablie par l'annulation ;
+- deux ouvertures du fichier audio par écriture au lieu de sept à dix.
+
+**452 tests** passent sous Python 3.12 et 3.13. Non essayé : un vrai partage SMB. Le remplacement final est un renommage par-dessus le fichier existant ; SMB2 le permet via l'indicateur `ReplaceIfExists` de `FileRenameInformation` ([MS-FSCC 2.4.37.2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/52aa0b70-8094-4971-862d-79793f41e6a8)). En cas de refus, l'écriture échoue et l'original reste intact.
 
 ## Version 0.10.2 — robustesse
 

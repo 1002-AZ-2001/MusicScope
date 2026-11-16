@@ -106,25 +106,23 @@ def test_changed_file_is_refused_and_untouched(tmp_path):
     assert easy(track.path, "album") == ["Ancien album"]
 
 
-def test_failed_verification_restores_original_values(tmp_path, monkeypatch):
+def test_failed_verification_leaves_the_original_file_untouched(tmp_path, monkeypatch):
+    import hashlib
     album = make_album(tmp_path, ("flac",))
     track = album.tracks[0]
-    real_write = tagwriter._write
-    calls = []
+    before = hashlib.sha256(Path(track.path).read_bytes()).hexdigest()
 
-    def flaky(path, values):
-        calls.append(values)
-        real_write(path, values)
-        if len(calls) == 1:
-            raise ValueError("relecture différente")
+    def broken(left, right):
+        raise ValueError("Durée audio modifiée ; rien n’a été remplacé")
 
-    monkeypatch.setattr(tagwriter, "_write", flaky)
+    monkeypatch.setattr(tagwriter, "_same_audio", broken)
     edits = plan_album_edits(album, {"album": "Nouvel album"}, {})
     with TagJournal(tmp_path / "tags.sqlite3") as journal:
         result = journal.apply(edits, album.path)
         assert not result.written and result.failed
         assert journal.entries(result.batch_id)[0][3] == "failed_restored"
-    assert easy(track.path, "album") == ["Ancien album"]
+    assert hashlib.sha256(Path(track.path).read_bytes()).hexdigest() == before
+    assert [path.name for path in Path(track.path).parent.iterdir()] == ["01.flac"]  # copie de travail retirée
 
 
 def test_undo_refused_when_tags_changed_after_writing(tmp_path):
