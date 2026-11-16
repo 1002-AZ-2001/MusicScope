@@ -163,9 +163,8 @@ def test_plan_keeps_only_real_changes(tmp_path):
     assert split_values(" A ;B;; ") == ["A", "B"]
 
 
-def test_cancel_stops_between_files(tmp_path):
+def test_cancel_stops_between_files_and_reports_partial_result(tmp_path):
     from threading import Event
-    from musicscope.cache import ScanCancelled
     album = make_album(tmp_path, ("flac", "ogg"))
     cancel = Event()
     edits = plan_album_edits(album, {"album": "Nouvel album"}, {})
@@ -173,9 +172,44 @@ def test_cancel_stops_between_files(tmp_path):
     def stop(done, total, path):
         cancel.set()
 
-    with TagJournal(tmp_path / "tags.sqlite3") as journal, pytest.raises(ScanCancelled):
-        journal.apply(edits, album.path, cancel=cancel, progress=stop)
-    assert [easy(track.path, "album") for track in album.ordered_tracks] == [["Nouvel album"], ["Ancien album"]]
+    with TagJournal(tmp_path / "tags.sqlite3") as journal:
+        result = journal.apply(edits, album.path, cancel=cancel, progress=stop)
+        # Le fichier déjà écrit est signalé : l'interface peut relancer l'analyse et l'annuler.
+        assert result.cancelled and result.written == [album.ordered_tracks[0].path]
+        assert journal.batches()[0].written == 1
+        cancel.clear()
+        undo = journal.undo(result.batch_id)
+    assert undo.written == [album.ordered_tracks[0].path]
+    assert [easy(track.path, "album") for track in album.ordered_tracks] == [["Ancien album"], ["Ancien album"]]
+
+
+def test_cancelled_undo_does_not_mark_batch_undone(tmp_path):
+    from threading import Event
+    album = make_album(tmp_path, ("flac", "ogg"))
+    edits = plan_album_edits(album, {"album": "Nouvel album"}, {})
+    cancel = Event()
+    with TagJournal(tmp_path / "tags.sqlite3") as journal:
+        batch = journal.apply(edits, album.path).batch_id
+        result = journal.undo(batch, cancel=cancel, progress=lambda *args: cancel.set())
+        assert result.cancelled and len(result.written) == 1
+        assert journal.batches()[0].undone_at is None
+        cancel.clear()
+        assert len(journal.undo(batch).written) == 1
+        assert journal.batches()[0].undone_at
+
+
+def test_undo_retries_entries_whose_restore_failed(tmp_path):
+    album = make_album(tmp_path, ("flac",))
+    edits = plan_album_edits(album, {"genre": "Jazz"}, {})
+    with TagJournal(tmp_path / "tags.sqlite3") as journal:
+        batch = journal.apply(edits, album.path).batch_id
+        # Écriture puis restauration en échec : le fichier porte encore les nouvelles valeurs.
+        journal.db.execute("UPDATE tag_entries SET status='failed'")
+        journal.db.commit()
+        result = journal.undo(batch)
+        assert result.written == [album.tracks[0].path] and not result.failed
+        assert journal.batches()[0].undone_at
+    assert easy(album.tracks[0].path, "genre") != ["Jazz"]
 
 
 def test_musicbrainz_proposals_limited_to_editable_fields(tmp_path):

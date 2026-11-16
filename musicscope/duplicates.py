@@ -4,7 +4,9 @@ Un groupe réunit des albums reliés par une comparaison concluante (copie
 exacte, même édition probable, pistes correspondantes). Une paire « À vérifier »
 n'est ajoutée que si les noms de dossiers désignent le même album et la même
 année ; le groupe est alors marqué « À vérifier » et rien n'est présélectionné.
-Les éditions distinctes ne sont jamais regroupées.
+Deux éditions jugées distinctes ne sont jamais proposées comme doublons : si des
+liens indirects les réunissent dans un même groupe (A≈B, B≈C mais A≠C), le groupe
+passe « À vérifier » et rien n'est présélectionné.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ class CopyScore:
     strengths: list[str] = field(default_factory=list)
     weaknesses: list[str] = field(default_factory=list)
     linked_files: int = 0
+    linked_bytes: int = 0  # pistes liées ailleurs : les retirer ne libère pas leur espace
 
 
 @dataclass
@@ -52,16 +55,15 @@ class DuplicateGroup:
     def extra_bytes(self) -> int:
         if self.keep is None:
             return 0
-        return sum(track.size for index, album in enumerate(self.albums) if index != self.keep
-                   for track in album.tracks)
+        return sum(sum(track.size for track in album.tracks) - score.linked_bytes
+                   for index, (album, score) in enumerate(zip(self.albums, self.scores)) if index != self.keep)
 
     def to_remove(self) -> list[Album]:
         return [album for index, album in enumerate(self.albums) if index != self.keep] if self.keep is not None else []
 
 
-def physical_files(album: Album) -> list[tuple[int, int, int]]:
-    """(périphérique, inode, liens) de chaque piste, lus directement : sur un partage réseau,
-    l'inventaire n'enregistre pas l'identité physique, mais le serveur peut la transmettre."""
+def _physical_by_track(album: Album) -> list[tuple[int, int, int, int]]:
+    """(périphérique, inode, liens, taille) de chaque piste lisible et inchangée."""
     result = []
     for track in album.tracks:
         try:
@@ -69,8 +71,14 @@ def physical_files(album: Album) -> list[tuple[int, int, int]]:
         except OSError:
             continue
         if (info.st_size, info.st_mtime_ns) == (track.size, track.mtime_ns) and info.st_ino:
-            result.append((info.st_dev, info.st_ino, info.st_nlink))
+            result.append((info.st_dev, info.st_ino, info.st_nlink, track.size))
     return result
+
+
+def physical_files(album: Album) -> list[tuple[int, int, int]]:
+    """(périphérique, inode, liens) de chaque piste, lus directement : sur un partage réseau,
+    l'inventaire n'enregistre pas l'identité physique, mais le serveur peut la transmettre."""
+    return [(device, inode, links) for device, inode, links, _ in _physical_by_track(album)]
 
 
 def score_album(album: Album) -> CopyScore:
@@ -96,7 +104,9 @@ def score_album(album: Album) -> CopyScore:
     if issues:
         result.weaknesses.append(f"{issues} constat(s) d’audit")
     size = sum(track.size for track in album.tracks)
-    linked = sum(links > 1 for _, _, links in physical_files(album))
+    physical = _physical_by_track(album)
+    linked = sum(links > 1 for _, _, links, _ in physical)
+    result.linked_bytes = sum(size for _, _, links, size in physical if links > 1)
     if linked:
         # À qualité égale, garder la copie liée : la retirer ne libérerait aucun espace.
         result.strengths.append(f"{linked} fichier(s) liés physiquement (Lidarr, qBittorrent)")
@@ -131,7 +141,10 @@ def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[Dupli
         return key
 
     links: list[tuple[int, int, str]] = []
+    distinct: set[frozenset[int]] = set()
     for left, right, comparison in pairs:
+        if comparison.status == DISTINCT and left is not right:
+            distinct.add(frozenset((id(left), id(right))))
         if comparison.status == DISTINCT or left is right:
             continue
         confidence = _confidence(comparison.status)
@@ -151,12 +164,19 @@ def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[Dupli
         inside = set(keys)
         confidences = [confidence for left, right, confidence in links if left in inside and right in inside]
         confidence = max(confidences, key=CONFIDENCE_ORDER.__getitem__)
+        mixed_editions = any(pair <= inside for pair in distinct)
+        if mixed_editions:
+            confidence = UNSURE
         scores = [score_album(album) for album in group_albums]
         ranked = sorted(range(len(scores)), key=lambda index: scores[index].score, reverse=True)
         best, second = ranked[0], ranked[1]
         keep = best if scores[best].score[:-1] != scores[second].score[:-1] else None
         reasons = []
-        if confidence == UNSURE:
+        if mixed_editions:
+            keep = None
+            reasons.append("Ce groupe réunit des éditions jugées distinctes (reliées par une troisième copie) : "
+                           "comparez-les et choisissez vous-même ce qu’il faut garder.")
+        elif confidence == UNSURE:
             keep = None
             reasons.append("Correspondance incertaine : vérifiez les deux albums, puis choisissez vous-même la copie à garder.")
         elif keep is None:

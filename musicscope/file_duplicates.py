@@ -27,7 +27,7 @@ from .metadata import AUDIO_EXTENSIONS, read_track
 from .models import Track
 from .normalization import name_key
 from .organizer import (
-    QUARANTINE_DIR, OrganizeError, _check_ancestors, _collision, _fsync_directory, _mkdir_safe,
+    QUARANTINE_DIR, OrganizeError, _check_ancestors, _collision, _fsync_directory, _mkdir_safe, _remove_reservation,
     _rename_without_replace, _save_journal,
 )
 
@@ -353,6 +353,31 @@ def fully_selected(groups: list[FileGroup], selected: set[str]) -> list[FileGrou
     return [group for group in groups if all(record.path in selected for record in group.files)]
 
 
+class StaleSelection(RuntimeError):
+    """La liste de groupes ne correspond plus au disque."""
+
+
+def _unchanged(record: FileRecord) -> bool:
+    try:
+        info = os.lstat(record.path)
+    except OSError:
+        return False
+    return stat_module.S_ISREG(info.st_mode) and (info.st_size, info.st_mtime_ns) == (record.size, record.mtime_ns)
+
+
+def groups_without_kept_copy(groups: list[FileGroup], selected: set[str]) -> list[FileGroup]:
+    """Groupes touchés par la sélection dont aucune copie non cochée n'existe plus telle
+    qu'analysée (déplacée par une quarantaine d'albums, renommée, modifiée) : les retirer
+    ferait disparaître toutes les copies de la bibliothèque. Lit le disque : à appeler hors du fil Qt."""
+    orphaned = []
+    for group in groups:
+        if not any(record.path in selected for record in group.files):
+            continue
+        if not any(_unchanged(record) for record in group.files if record.path not in selected):
+            orphaned.append(group)
+    return orphaned
+
+
 # Quarantaine des fichiers, journal et restauration.
 def _destination(root: Path, source: Path) -> Path:
     relative = source.relative_to(root)
@@ -366,7 +391,10 @@ def _destination(root: Path, source: Path) -> Path:
 
 def quarantine_files(records: list[FileRecord], library_root: str | Path, journal_dir: str | Path,
                      cancel: Event | None = None, progress: Progress = None) -> tuple[Path, list[str], list[tuple[str, str]]]:
-    """Déplace chaque fichier inchangé depuis l'analyse ; journal écrit avant chaque déplacement."""
+    """Déplace chaque fichier inchangé depuis l'analyse ; journal écrit avant chaque déplacement.
+
+    Une annulation arrête la boucle sans lever d'exception : les fichiers déjà déplacés sont
+    renvoyés, pour que l'interface reflète l'état réel du disque."""
     root = Path(library_root).absolute()
     journal_dir = Path(journal_dir)
     _mkdir_safe(journal_dir)
@@ -375,7 +403,8 @@ def quarantine_files(records: list[FileRecord], library_root: str | Path, journa
               "created_at": datetime.now(timezone.utc).isoformat(), "entries": []}
     moved, failed = [], []
     for position, item in enumerate(records, 1):
-        check_cancel(cancel)
+        if cancel is not None and cancel.is_set():
+            break
         source = Path(item.path).absolute()
         try:
             if not source.is_relative_to(root) or source.relative_to(root).parts[0] == QUARANTINE_DIR:
@@ -422,33 +451,47 @@ def read_file_journal(journal_path: str | Path) -> dict:
 
 def restore_file_journal(journal_path: str | Path, cancel: Event | None = None,
                          progress: Progress = None) -> tuple[list[str], list[tuple[str, str]]]:
-    """Remet chaque fichier à sa place s'il est intact en quarantaine et que sa place est libre."""
+    """Remet chaque fichier à sa place s'il est intact en quarantaine et que sa place est libre.
+
+    Le journal est enregistré régulièrement et en toute fin, même après une annulation ou une
+    erreur : une reprise ne voit jamais un fichier déjà revenu comme « encore en quarantaine »."""
     path = Path(journal_path)
     data = read_file_journal(path)
     restored, failed = [], []
     entries = [entry for entry in data["entries"] if entry.get("state") in {"moved", "intent"}]
-    for position, entry in enumerate(entries, 1):
-        check_cancel(cancel)
-        try:
-            source, destination = Path(entry["source"]), Path(entry["destination"])
-            if not destination.exists() and source.exists() and entry["state"] == "intent":
-                entry["state"] = "restored"  # déplacement jamais effectué
-                continue
-            _check_ancestors(destination.parent)
-            info = destination.lstat()
-            if not stat_module.S_ISREG(info.st_mode) or (info.st_size, info.st_mtime_ns) != (entry["size"], entry["mtime_ns"]):
-                raise OrganizeError("Le fichier en quarantaine a changé ou a disparu.")
-            if _collision(source):
-                raise OrganizeError("Un fichier occupe déjà l'emplacement d'origine.")
-            _mkdir_safe(source.parent)
-            _rename_without_replace(destination, source, (info.st_dev, info.st_ino), is_dir=False)
-            entry["state"] = "restored"
-            restored.append(str(source))
-        except (OSError, OrganizeError, KeyError, TypeError) as exc:
-            failed.append((str(entry.get("source", "?")), str(exc)))
-        if progress:
-            progress(position, len(entries), str(entry.get("source", "")))
-    _save_journal(path, data)
+    try:
+        for position, entry in enumerate(entries, 1):
+            if cancel is not None and cancel.is_set():
+                break
+            try:
+                source, destination = Path(entry["source"]), Path(entry["destination"])
+                if entry["state"] == "intent" and source.exists() and destination.exists() and entry["size"] > 0:
+                    # Quarantaine interrompue pendant le repli SMB/NFS : seule la réservation vide existe.
+                    _remove_reservation(destination)
+                if not destination.exists() and source.exists() and entry["state"] == "intent":
+                    entry["state"] = "restored"  # déplacement jamais effectué
+                    continue
+                _check_ancestors(destination.parent)
+                info = destination.lstat()
+                if not stat_module.S_ISREG(info.st_mode) or (info.st_size, info.st_mtime_ns) != (entry["size"], entry["mtime_ns"]):
+                    raise OrganizeError("Le fichier en quarantaine a changé ou a disparu.")
+                if _collision(source) and entry["size"] > 0:
+                    # Restauration interrompue pendant le repli SMB/NFS : réservation vide à l'origine.
+                    _remove_reservation(source)
+                if _collision(source):
+                    raise OrganizeError("Un fichier occupe déjà l'emplacement d'origine.")
+                _mkdir_safe(source.parent)
+                _rename_without_replace(destination, source, (info.st_dev, info.st_ino), is_dir=False)
+                entry["state"] = "restored"
+                restored.append(str(source))
+            except (OSError, OrganizeError, KeyError, TypeError) as exc:
+                failed.append((str(entry.get("source", "?")), str(exc)))
+            if progress:
+                progress(position, len(entries), str(entry.get("source", "")))
+            if position % 50 == 0:
+                _save_journal(path, data)
+    finally:
+        _save_journal(path, data)
     return restored, failed
 
 

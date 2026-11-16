@@ -239,6 +239,15 @@ class FileDuplicatesPage(QWidget):
         self.window.set_page_count(self.window.file_duplicates_index, len(groups))
         self.update_summary()
 
+    def invalidate(self, reason: str):
+        """Vide la liste : après un scan, une quarantaine d'albums ou une restauration, les groupes
+        affichés ne correspondent plus au disque et ne doivent plus servir à cocher des fichiers."""
+        if not self.groups and not self.items:
+            return
+        self.examined = 0
+        self.render([])
+        self.result_label.setText(reason)
+
     # Sélection
     def selected(self) -> set[str]:
         return {path for path, item in self.items.items() if item.checkState(0) == Qt.CheckState.Checked}
@@ -322,12 +331,14 @@ class FileDuplicatesPage(QWidget):
         root, journal_dir = window.root, window.cache_dir / "journals"
 
         def done(result):
-            journal, moved, failed = result
+            journal, moved, failed, cancelled = result
             gone = set(moved)
             remaining = [fd.FileGroup([r for r in group.files if r.path not in gone], group.criteria)
                          for group in self.groups]
             self.render([group for group in remaining if len(group.files) > 1])
             message = f"{len(moved)} fichier(s) en quarantaine. Journal : {journal}"
+            if cancelled:
+                message = "Opération interrompue à votre demande. " + message
             if failed:
                 window.show_error(message + " — Échecs : " + " | ".join(f"{Path(p).name} : {e}" for p, e in failed))
             else:
@@ -335,8 +346,20 @@ class FileDuplicatesPage(QWidget):
             if moved:
                 window.requires_rescan = True
 
-        window.run_task("Mise en quarantaine des fichiers cochés…",
-                        lambda cancel, progress: fd.quarantine_files(records, root, journal_dir, cancel, progress), done)
+        groups = self.groups
+
+        def operation(cancel, progress):
+            # La liste peut dater d'avant une quarantaine d'albums ou un rangement : chaque groupe
+            # doit encore garder, hors sélection, au moins une copie inchangée sur le disque.
+            orphaned = fd.groups_without_kept_copy(groups, set(selected))
+            if orphaned:
+                names = ", ".join(sorted({Path(record.path).name for group in orphaned[:3] for record in group.files}))
+                raise fd.StaleSelection(
+                    f"Refusé : pour {len(orphaned)} groupe(s), aucune copie non cochée n’existe plus telle "
+                    f"qu’analysée ({names}…). La liste est périmée : relancez la recherche.")
+            return (*fd.quarantine_files(records, root, journal_dir, cancel, progress), cancel.is_set())
+
+        window.run_task("Mise en quarantaine des fichiers cochés…", operation, done)
 
     def restore(self, journal_path=None):
         window = self.window
@@ -357,6 +380,7 @@ class FileDuplicatesPage(QWidget):
 
         def done(result):
             restored, failed = result
+            self.invalidate("Des fichiers ont été restaurés : relancez la recherche.")
             message = f"{len(restored)} fichier(s) restauré(s). Relancez la recherche pour actualiser la liste."
             if failed:
                 window.show_error(message + " — Échecs : " + " | ".join(f"{Path(p).name} : {e}" for p, e in failed))
