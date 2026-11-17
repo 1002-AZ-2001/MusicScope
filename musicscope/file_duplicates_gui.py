@@ -174,7 +174,12 @@ class FileDuplicatesPage(QWidget):
             try:
                 records = fd.collect_files(root, options, tracks, cancel, progress)
                 with Cache(window.cache_dir / "inventory.sqlite3") as cache:
-                    return records, fd.find_duplicates(records, options, cache, printer, cancel, progress)
+                    groups = fd.find_duplicates(records, options, cache, printer, cancel, progress)
+                if owned is not None and not options.exclude_folders and not options.include_extensions \
+                        and not options.exclude_extensions and options.max_size is None:
+                    # Parcours complet de la racine : les empreintes des fichiers disparus sont inutiles.
+                    owned.purge_missing(root, {record.path for record in records})
+                return records, groups
             finally:
                 if owned is not None:
                     owned.close()
@@ -193,7 +198,11 @@ class FileDuplicatesPage(QWidget):
         self.records = {record.path: record for group in groups for record in group.files}
         self.items = {}
         self.tree.blockSignals(True)
-        self.tree.clear()
+        # Vider un arbre déplié avec clear() est quadratique (12 s pour 8 000 groupes) ;
+        # replié puis détaché d'un bloc : quelques dixièmes de seconde.
+        self.tree.setUpdatesEnabled(False)
+        self.tree.collapseAll()
+        self.tree.invisibleRootItem().takeChildren()
         root = self.window.root.rstrip(os.sep)
         for number, group in enumerate(groups, 1):
             parent = QTreeWidgetItem([f"Groupe {number} — {len(group.files)} fichiers", " + ".join(group.criteria),
@@ -229,6 +238,7 @@ class FileDuplicatesPage(QWidget):
                 self.items[record.path] = item
             self.tree.addTopLevelItem(parent)
         self.tree.expandAll()
+        self.tree.setUpdatesEnabled(True)
         self.tree.blockSignals(False)
         for column, width in enumerate((280, 300, 90, 130, 70, 80, 70, 90)):
             self.tree.setColumnWidth(column, width)
@@ -295,6 +305,7 @@ class FileDuplicatesPage(QWidget):
         menu.addSeparator()
         menu.addAction("Ouvrir le dossier").triggered.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(folder)))
         menu.exec(self.tree.viewport().mapToGlobal(position))
+        menu.deleteLater()  # un menu par clic droit restait sinon attaché à la fenêtre
 
     # Actions
     def quarantine(self, confirm=None):
@@ -392,10 +403,18 @@ class FileDuplicatesPage(QWidget):
                         lambda cancel, progress: fd.restore_file_journal(journal_path, cancel, progress), done)
 
     def empty(self, confirm=None):
+        """La quarantaine est mesurée hors du fil Qt (un lstat par fichier, lent sur le NAS),
+        puis les confirmations s'affichent une fois la tâche terminée."""
         window = self.window
         if not window.root:
             return
-        folder, count, size = fd.quarantine_summary(window.root)
+        root = window.root
+        window.run_task("Mesure de la quarantaine…", lambda cancel, progress: fd.quarantine_summary(root),
+                        lambda summary: window._start_after_task(lambda: self._confirm_empty(summary, confirm)))
+
+    def _confirm_empty(self, summary, confirm):
+        window = self.window
+        folder, count, size = summary
         if not count:
             window.state.setText("La quarantaine est vide.")
             return

@@ -84,19 +84,47 @@ class JellyfinDialog(QDialog):
         return factory(self.server.text().strip(), self.token.text())
 
     def test_connection(self):
-        from PySide6.QtWidgets import QApplication
+        """Requêtes dans un thread : la fenêtre reste réactive pendant l'attente (jusqu'à 20 s
+        sur une adresse erronée), puis le résultat est appliqué ici, sur le fil Qt."""
+        import threading
+        from PySide6.QtCore import QEventLoop
         from .jellyfin import JellyfinUnavailable
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        outcome = {}
         try:
             client = self._client()
-            info = client.server_info()
-            self.libraries = [library for library in client.libraries() if library.is_music]
-        except (ValueError, JellyfinUnavailable) as exc:
-            self.status.setText(f"Échec : {exc}")
+        except ValueError as exc:
+            outcome["error"] = exc
+        else:
+            client.attempts = 1  # un test doit répondre vite : pas de nouvelles tentatives
+
+            def work():
+                try:
+                    info = client.server_info()
+                    outcome["value"] = (info, getattr(client, "last_libraries", None) or client.libraries())
+                except (ValueError, JellyfinUnavailable) as exc:
+                    outcome["error"] = exc
+                except Exception as exc:  # jamais d'exception hors du thread
+                    outcome["error"] = JellyfinUnavailable(f"{type(exc).__name__} : {exc}")
+
+            worker = threading.Thread(target=work, name="musicscope-jellyfin-test", daemon=True)
+            self.test_button.setEnabled(False)
+            self.status.setText("Test de connexion en cours…")
+            self.status.setStyleSheet("")
+            worker.start()
+            loop = QEventLoop(self)
+            timer = QTimer(self)
+            timer.timeout.connect(lambda: None if worker.is_alive() else loop.quit())
+            timer.start(30)
+            loop.exec()
+            timer.stop()
+            timer.deleteLater()
+            self.test_button.setEnabled(True)
+        if "error" in outcome:
+            self.status.setText(f"Échec : {outcome['error']}")
             self.status.setStyleSheet("color:#ff9e80")
             return False
-        finally:
-            QApplication.restoreOverrideCursor()
+        info, libraries = outcome["value"]
+        self.libraries = [library for library in libraries if library.is_music]
         current = self.library.currentData()
         self.library.blockSignals(True)
         self.library.clear()
@@ -182,8 +210,12 @@ class AdvancedWindow(MainWindow):
                                else " (vos décisions de revue seront perdues)."))
 
     def _build_extended_tabs(self):
-        self.jellyfin_table, self.jellyfin_model, self.jellyfin_proxy = make_table(
-            ["Statut", "Chemin serveur", "Chemin local", "Titre", "Identifiant catalogue", "Motif"])
+        headers = ["Statut", "Chemin serveur", "Chemin local", "Titre", "Identifiant catalogue", "Motif"]
+        self.jellyfin_table, _, _ = make_table(headers)
+        from .gui import RowsModel
+        # Une ligne par fichier (96 585) : modèle virtuel qui filtre et trie lui-même, sans proxy.
+        self.jellyfin_model = self.jellyfin_proxy = RowsModel(headers, self.jellyfin_table)
+        self.jellyfin_table.setModel(self.jellyfin_model)
         jellyfin_page = QWidget()
         jellyfin_layout = QVBoxLayout(jellyfin_page)
         jellyfin_bar = QHBoxLayout()
@@ -368,6 +400,14 @@ class AdvancedWindow(MainWindow):
         callback, self._after_task = self._after_task, None
         if callback is not None:
             QTimer.singleShot(0, callback)
+
+    def prepare_in_worker(self, inventory, pairs, progress=None) -> dict:
+        from .duplicates import duplicate_groups
+        prepared = super().prepare_in_worker(inventory, pairs, progress)
+        if progress:
+            progress(0, 0, "Recherche des albums en double…")
+        prepared.update(pairs=pairs, duplicate_groups=duplicate_groups(pairs))
+        return prepared
 
     def _mark_summary_stale(self):
         text = self.summary.text()
@@ -554,14 +594,19 @@ class AdvancedWindow(MainWindow):
         interactive = server_url is None
         if interactive:
             dialog = JellyfinDialog(self.root, self._jellyfin_previous(), self)
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            server_url, api_key, mapping_rows, library_id = dialog.configuration()
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                server_url, api_key, mapping_rows, library_id = dialog.configuration()
+                library_name = dialog.library_name()
+            finally:
+                # Sinon chaque dialogue fermé (et la clé saisie) reste en mémoire.
+                getattr(dialog, "deleteLater", lambda: None)()
             self._jellyfin_config = {"server": server_url, "key": api_key, "mappings": mapping_rows,
-                                     "library_id": library_id, "library_name": dialog.library_name()}
+                                     "library_id": library_id, "library_name": library_name}
             # La clé n'est jamais écrite sur disque.
             self.save_preferences(jellyfin={"server": server_url, "mappings": mapping_rows, "library_id": library_id,
-                                            "library_name": dialog.library_name()})
+                                            "library_name": library_name})
             mappings = [PathMapping(*row) for row in mapping_rows]
         def operation(cancel, progress):
             return JellyfinClient(server_url, api_key, library_id=library_id).diagnose(
@@ -579,9 +624,8 @@ class AdvancedWindow(MainWindow):
                     QMessageBox.warning(self, "Diagnostic Jellyfin", message)
                 return
             from .jellyfin import OK_STATUS
-            for finding in result.findings:
-                append_row(self.jellyfin_model, [finding.status, finding.server_path, finding.local_path,
-                    finding.title, finding.item_id, finding.reason])
+            self.jellyfin_model.set_rows((finding.status, finding.server_path, finding.local_path,
+                                          finding.title, finding.item_id, finding.reason) for finding in result.findings)
             counts = {}
             for finding in result.findings:
                 counts[finding.status] = counts.get(finding.status, 0) + 1
@@ -598,13 +642,11 @@ class AdvancedWindow(MainWindow):
 
     @Slot()
     def filter_jellyfin(self, *_):
-        from PySide6.QtCore import QRegularExpression
         from .jellyfin import OK_STATUS
-        self.jellyfin_proxy.setFilterKeyColumn(0)
         if self.jellyfin_filter.currentData() == "problems":
-            self.jellyfin_proxy.setFilterRegularExpression(QRegularExpression(f"^(?!{OK_STATUS}$)"))
+            self.jellyfin_model.set_filter(lambda row: row[0] != OK_STATUS)
         else:
-            self.jellyfin_proxy.setFilterRegularExpression(QRegularExpression(""))
+            self.jellyfin_model.set_filter(None)
 
     def start_recognition(self, api_key=None, track=None):
         if not self._fresh() or self.task is not None:
@@ -761,9 +803,12 @@ class AdvancedWindow(MainWindow):
         if dialog_values is None:
             verification = self.verifications.get(album.path)
             dialog = TagEditorDialog(album, getattr(verification, "proposals", None), self)
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            edits = dialog.edits()
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                edits = dialog.edits()
+            finally:
+                getattr(dialog, "deleteLater", lambda: None)()
         else:
             edits = plan_album_edits(album, *dialog_values)
         if not edits:
@@ -911,7 +956,14 @@ class AdvancedWindow(MainWindow):
         from .gui import STATUS_COLORS
         from .comparison import IDENTICAL, MATCHING
         from PySide6.QtGui import QColor
-        self.duplicate_groups = [] if self.historical else duplicate_groups(self.matches)
+        prepared = getattr(self, "prepared", {}) or {}
+        if self.historical:
+            self.duplicate_groups = []
+        elif prepared.get("pairs") is self.matches and "duplicate_groups" in prepared:
+            # Calculés dans le worker (lecture des liens physiques sur le disque).
+            self.duplicate_groups = prepared.pop("duplicate_groups")
+        else:
+            self.duplicate_groups = duplicate_groups(self.matches)
         colors = {"Copie exacte": STATUS_COLORS[IDENTICAL], "Même album probable": STATUS_COLORS[MATCHING],
                   "À vérifier": "#9fb3c1"}
         self.duplicate_model.removeRows(0, self.duplicate_model.rowCount())

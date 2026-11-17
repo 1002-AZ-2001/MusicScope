@@ -44,6 +44,12 @@ class Cache:
                 root TEXT PRIMARY KEY, body TEXT NOT NULL
             );
         """)
+        # ctime (date de changement d'état) : détecte une réécriture des tags dont la taille et la
+        # date de modification ont été préservées (option de Mp3tag ou foobar2000).
+        for table in ("tracks", "hashes"):
+            columns = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+            if "ctime_ns" not in columns:
+                self.connection.execute(f"ALTER TABLE {table} ADD COLUMN ctime_ns INTEGER")
         self.connection.commit()
         self._deferred = 0
         self._pending = 0
@@ -83,23 +89,39 @@ class Cache:
 
     def get_track(self, path: str | Path, stat: os.stat_result) -> Track | None:
         row = self.connection.execute(
-            "SELECT body FROM tracks WHERE path=? AND size=? AND mtime_ns=?",
+            "SELECT body, ctime_ns FROM tracks WHERE path=? AND size=? AND mtime_ns=?",
             (str(path), stat.st_size, stat.st_mtime_ns),
         ).fetchone()
-        if row:
-            try:
-                return Track.from_dict(json.loads(row[0]))
-            except (ValueError, TypeError, AttributeError):
-                return None
-        return None
+        if not row:
+            return None
+        body, ctime = row
+        if ctime is not None and ctime != stat.st_ctime_ns:
+            return None  # fichier réécrit sans changer de taille ni de date : à relire
+        try:
+            track = Track.from_dict(json.loads(body))
+        except (ValueError, TypeError, AttributeError):
+            return None
+        if ctime is None:
+            # Entrée d'une version précédente : ctime complété sans relire le fichier.
+            self.connection.execute("UPDATE tracks SET ctime_ns=? WHERE path=?", (stat.st_ctime_ns, str(path)))
+            self._count_write()
+        return track
 
-    def put_track(self, track: Track) -> None:
+    def _count_write(self) -> None:
+        if not self._deferred:
+            self.connection.commit()
+            return
+        self._pending += 1
+        if self._pending >= self._commit_every:
+            self._flush()
+
+    def put_track(self, track: Track, ctime_ns: int | None = None) -> None:
         if not self._deferred:
             with self.connection:
-                self._insert_track(track)
+                self._insert_track(track, ctime_ns)
             return
         try:
-            self._insert_track(track)
+            self._insert_track(track, ctime_ns)
         except sqlite3.Error:
             self.connection.rollback()
             self._pending = 0
@@ -108,10 +130,10 @@ class Cache:
         if self._pending >= self._commit_every:
             self._flush()
 
-    def _insert_track(self, track: Track) -> None:
+    def _insert_track(self, track: Track, ctime_ns: int | None = None) -> None:
         self.connection.execute(
-            "INSERT OR REPLACE INTO tracks VALUES (?, ?, ?, ?)",
-            (track.path, track.size, track.mtime_ns, json.dumps(asdict(track))),
+            "INSERT OR REPLACE INTO tracks (path, size, mtime_ns, body, ctime_ns) VALUES (?, ?, ?, ?, ?)",
+            (track.path, track.size, track.mtime_ns, json.dumps(asdict(track)), ctime_ns),
         )
 
     def save_inventory(self, inventory: Inventory) -> None:
@@ -173,10 +195,10 @@ class Cache:
         before = path.stat(follow_symlinks=False)
         self._check_version(track, before)
         row = self.connection.execute(
-            "SELECT sha256 FROM hashes WHERE path=? AND size=? AND mtime_ns=?",
+            "SELECT sha256, ctime_ns FROM hashes WHERE path=? AND size=? AND mtime_ns=?",
             (track.path, track.size, track.mtime_ns),
         ).fetchone()
-        if row:
+        if row and row[1] in (None, before.st_ctime_ns):
             return row[0]
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
@@ -200,8 +222,8 @@ class Cache:
         value = digest.hexdigest()
         with self.connection:
             self.connection.execute(
-                "INSERT OR REPLACE INTO hashes VALUES (?, ?, ?, ?)",
-                (track.path, track.size, track.mtime_ns, value),
+                "INSERT OR REPLACE INTO hashes (path, size, mtime_ns, sha256, ctime_ns) VALUES (?, ?, ?, ?, ?)",
+                (track.path, track.size, track.mtime_ns, value, before.st_ctime_ns),
             )
         return value
 

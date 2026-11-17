@@ -112,22 +112,43 @@ class MountCache:
     masqué par l'instantané. Une instance par thread.
     """
 
-    def __init__(self, reader: Callable[[], dict[str, frozenset[str]]] | None = None):
+    def __init__(self, reader: Callable[[], dict[str, frozenset[str]]] | None = None, root: Path | None = None):
         self._reader = reader or read_mount_points
         self._table: dict[str, frozenset[str]] | None = None
         self._devices: set[int] = set()
         self._decisions: dict[tuple[str, int], bool] = {}
         self._volumes: dict[tuple[str, int], WindowsVolume | None] = {}
         self.reloads = 0
+        # Racine atteinte par un lien (ex. ~/Musique -> /mnt/NAS) : les décisions portent sur le
+        # chemin réel, résolu une seule fois ; sous la racine, le scan ne suit aucun lien.
+        self._rebase: tuple[str, str] | None = None
+        if root is not None:
+            try:
+                lexical, real = str(Path(root)), os.path.realpath(root)
+            except (OSError, ValueError):
+                lexical = real = ""
+            if lexical and real != lexical:
+                self._rebase = (lexical, real)
+
+    def _real(self, path: Path) -> Path:
+        if self._rebase is not None:
+            lexical, real = self._rebase
+            text = str(path)
+            if text == lexical or text.startswith(lexical.rstrip(os.sep) + os.sep):
+                return Path(real + text[len(lexical):])
+        return path
 
     def _reload(self) -> None:
+        """Relit la table pour un périphérique encore inconnu ; les décisions déjà prises restent
+        valables tant que la table ne change pas (plusieurs volumes en alternance)."""
         self.reloads += 1
-        self._decisions.clear()
-        self._devices.clear()
         try:
-            self._table = self._reader()
+            table = self._reader()
         except (OSError, ValueError, IndexError):
-            self._table = None
+            table = None
+        if table != self._table:
+            self._decisions.clear()
+        self._table = table
 
     def _filesystems(self, path: Path) -> frozenset[str]:
         assert self._table is not None
@@ -138,6 +159,7 @@ class MountCache:
         return frozenset()
 
     def is_local(self, path: Path, device: int) -> bool:
+        path = self._real(Path(path))
         if device not in self._devices:
             self._reload()
             self._devices.add(device)
@@ -199,7 +221,7 @@ def is_local_storage(path: Path, mounts: MountCache | None = None) -> bool:
             if text.startswith("\\\\") and not re.match(r"^\\\\\?\\[a-zA-Z]:\\", text):
                 return False
             return _windows_volume(text) is not None
-        return os.name == "posix" and (mounts or MountCache()).is_local(Path(path), info.st_dev)
+        return os.name == "posix" and (mounts or MountCache()).is_local(Path(os.path.realpath(path)), info.st_dev)
     except (OSError, AttributeError, ValueError):
         return False
 

@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from importlib.resources import files
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QSortFilterProxyModel, Qt, QThread, QTimer, QUrl, Signal, Slot, qVersion
+from PySide6.QtCore import QAbstractTableModel, QByteArray, QModelIndex, QSortFilterProxyModel, Qt, QThread, QTimer, QUrl, Signal, Slot, qVersion
 from PySide6.QtGui import (
     QAction, QColor, QDesktopServices, QIcon, QKeySequence, QPalette, QPixmap, QShortcut, QStandardItem,
     QStandardItemModel,
@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 
-from .audit import audit_album
+from .audit import album_issues
 from .cache import Cache, check_cancel
 from .comparison import (
     DISTINCT, IDENTICAL, MATCHING, PHYSICAL, PROBABLE, candidates, compare_albums, exact_file_groups,
@@ -254,8 +254,11 @@ class Task(QThread):
         self.cancel = threading.Event()
 
     def run(self):
+        from .scanner import _throttled
         try:
-            self.result.emit(self.operation(self.cancel, self.progress.emit))
+            # Progression limitée à 10 par seconde pour toutes les tâches (une par élément
+            # inondait la file d'événements : 96 192 signaux pour un catalogue Jellyfin).
+            self.result.emit(self.operation(self.cancel, _throttled(self.progress.emit)))
         except ScanCancelled:
             self.failed.emit("Opération annulée ; l’inventaire précédent est conservé.")
         except Exception as exc:
@@ -280,6 +283,86 @@ def make_table(headers):
     table.horizontalHeader().setStretchLastSection(True)
     table.setAlternatingRowColors(True)
     return table, model, proxy
+
+
+DETAILED_TAG_FILES = 40
+
+
+class _Cell:
+    def __init__(self, value):
+        self._value = value
+
+    def text(self) -> str:
+        return "" if self._value is None else str(self._value)
+
+
+class RowsModel(QAbstractTableModel):
+    """Table en lecture seule sur une liste de tuples : aucun objet Qt par cellule.
+
+    Pour 96 585 lignes, un QStandardItemModel crée environ 580 000 éléments (≈ 2,8 s et
+    +478 Mio) ; ce modèle ne garde que les tuples Python."""
+
+    def __init__(self, headers, parent=None):
+        super().__init__(parent)
+        self.headers = list(headers)
+        self.all_rows: list[tuple] = []
+        self.rows: list[tuple] = []  # lignes visibles, filtrées et triées
+        self._predicate = None
+        self._order: tuple[int, Qt.SortOrder] | None = None
+
+    def set_rows(self, rows) -> None:
+        self.all_rows = [tuple(row) for row in rows]
+        self._refresh()
+
+    def set_filter(self, predicate) -> None:
+        """Filtre et tri en Python, sur des tuples : bien plus rapides qu'un proxy Qt qui
+        rappellerait data() pour chaque comparaison."""
+        self._predicate = predicate
+        self._refresh()
+
+    def sort(self, column, order=Qt.SortOrder.AscendingOrder):
+        self._order = (column, order)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.beginResetModel()
+        rows = self.all_rows if self._predicate is None else [row for row in self.all_rows if self._predicate(row)]
+        if self._order is not None:
+            column, order = self._order
+            rows = sorted(rows, key=lambda row: ("" if row[column] is None else str(row[column])).casefold(),
+                          reverse=order == Qt.SortOrder.DescendingOrder)
+        self.rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.headers)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
+            return None
+        value = self.rows[index.row()][index.column()]
+        return "" if value is None else str(value)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self.headers[section]
+        return None
+
+    # Compatibilité avec l'interface de QStandardItemModel utilisée ailleurs.
+    def item(self, row, column):
+        return _Cell(self.rows[row][column])
+
+    def removeRows(self, row, count, parent=QModelIndex()):
+        if row == 0 and count >= len(self.rows):
+            self.set_rows([])
+            return True
+        return False
+
+    def data_at(self, row, column):
+        return self.rows[row][column]
 
 
 def append_row(model, values, identity=None):
@@ -423,8 +506,31 @@ class MainWindow(QMainWindow):
         self.path_delegate = path_delegate
         self.filter.textChanged.connect(self.album_proxy.setFilterFixedString)
         self.filter.textChanged.connect(self.match_proxy.setFilterFixedString)
-        self.album_table.selectionModel().selectionChanged.connect(self.show_album)
-        self.match_table.selectionModel().selectionChanged.connect(self.show_match)
+        # Détail affiché quand la sélection se stabilise : parcourir un coffret aux flèches ne
+        # refait plus la mise en page à chaque ligne.
+        # Première sélection affichée tout de suite, les suivantes rapprochées regroupées.
+        self._detail_timers = {}
+        for table, slot in ((self.album_table, self.show_album), (self.match_table, self.show_match)):
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(80)
+            timer.pending = False
+
+            def flush(timer=timer, slot=slot):
+                if timer.pending:
+                    timer.pending = False
+                    slot()
+
+            def changed(*_, timer=timer, slot=slot):
+                if timer.isActive():
+                    timer.pending = True
+                else:
+                    slot()
+                timer.start()
+
+            timer.timeout.connect(flush)
+            self._detail_timers[slot.__name__] = timer
+            table.selectionModel().selectionChanged.connect(changed)
         self.album_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.album_table.customContextMenuRequested.connect(self.album_context_menu)
         self.album_table.doubleClicked.connect(lambda *_: self.open_folder())
@@ -567,6 +673,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(enabled and self.task is None)
             action.triggered.connect(lambda checked=False, callback=callback: callback())
         menu.exec(self.album_table.viewport().mapToGlobal(position))
+        menu.deleteLater()  # un menu par clic droit restait sinon attaché à la fenêtre
 
     def album_actions(self, selected):
         """Actions du clic droit sur l'inventaire ; étendues par la fenêtre avancée."""
@@ -652,13 +759,14 @@ class MainWindow(QMainWindow):
                 return None
             check_cancel(cancel)
             progress(0, 0, "Recherche des rapprochements…")
-            return saved, [(a, b, compare_albums(a, b)) for a, b in candidates(saved.albums)]
+            pairs = [(a, b, compare_albums(a, b)) for a, b in candidates(saved.albums)]
+            return saved, pairs, self.prepare_in_worker(saved, pairs, progress)
 
         def done(result):
             if result is None or root != self.root:
                 self.state.setText("Prêt. Lancez l’analyse pour inventorier la médiathèque.")
                 return
-            saved, pairs = result
+            saved, pairs, self.prepared = result
             self.display_inventory(saved, pairs)
             when = format_scan_date(saved.scanned_at)
             self.state.setText(f"Inventaire du {when} chargé depuis le cache ({len(saved.albums)} albums), "
@@ -759,13 +867,21 @@ class MainWindow(QMainWindow):
             try:
                 result = scan(Path(root), cache, cancel=cancel, progress=progress)
                 pairs = [(a, b, compare_albums(a, b)) for a, b in candidates(result.albums)]
-                return result, pairs
+                return result, pairs, self.prepare_in_worker(result, pairs, progress)
             finally:
                 cache.close()
         self.run_task("Lecture de la médiathèque…", operation, self.scan_completed)
 
+    def prepare_in_worker(self, inventory, pairs, progress=None) -> dict:
+        """Calculs lourds d'affichage faits dans le worker, jamais sur le fil Qt."""
+        if progress:
+            progress(0, 0, "Préparation de l’affichage…")
+        for album in inventory.albums:
+            album_issues(album)  # mémorisé sur l'album
+        return {}
+
     def scan_completed(self, result):
-        inventory, pairs = result
+        inventory, pairs, self.prepared = result
         self.display_inventory(inventory, pairs)
         self.save_preferences(root=self.root)
         self.state.setText("Analyse terminée. Sélectionnez deux albums pour les comparer, ou lancez la recherche exacte.")
@@ -777,7 +893,7 @@ class MainWindow(QMainWindow):
         self.verifications = {}
         self.album_model.removeRows(0, self.album_model.rowCount())
         for index, album in enumerate(inventory.albums):
-            issues = list(dict.fromkeys(album.issues + audit_album(album)))
+            issues = album_issues(album)
             append_row(self.album_model, [album.value("albumartist") or album.value("artist") or "Artiste inconnu",
                 album.value("album") or Path(album.path).name, len(album.tracks),
                 ", ".join(sorted({t.codec for t in album.tracks})), album.value("musicbrainz_albumid") or "Indéterminée",
@@ -802,7 +918,7 @@ class MainWindow(QMainWindow):
                 for index in self.album_table.selectionModel().selectedRows()]
 
     def album_html(self, album):
-        issues = list(dict.fromkeys(album.issues + audit_album(album)))
+        issues = album_issues(album)
         lines = [f"<h2>{escaped(album.value('album') or Path(album.path).name)}</h2>",
                  f"<p><b>{escaped(album.value('albumartist'))}</b><br>{escaped(album.path)}</p>",
                  "<p>" + "<br>".join(escaped(issue) for issue in issues) + "</p>",
@@ -813,9 +929,14 @@ class MainWindow(QMainWindow):
             lines.append(f"<tr><td>{track.disc}/{track.number_in_disc}</td><td>{escaped(track.value('title'))}</td>"
                          f"<td>{escaped(track.value('artist'))}</td><td>{duration}</td><td>{escaped(track.codec)}</td></tr>")
         lines.append("</table><h3>Tags actuels par fichier</h3>")
-        for track in album.ordered_tracks:
+        tracks = album.ordered_tracks
+        # Au-delà, la mise en page à chaque sélection fige la navigation (0,6 s pour 1 000 pistes).
+        for track in tracks[:DETAILED_TAG_FILES]:
             lines.append(f"<p><b>{escaped(Path(track.path).name)}</b><br>" + "<br>".join(
                 f"{escaped(key)} : {escaped('; '.join(value))}" for key, value in sorted(track.tags.items())) + "</p>")
+        if len(tracks) > DETAILED_TAG_FILES:
+            lines.append(f"<p><i>… et {len(tracks) - DETAILED_TAG_FILES} autre(s) fichier(s) : tags détaillés non "
+                         "affichés pour garder la navigation fluide (voir l’éditeur de tags).</i></p>")
         return "".join(lines)
 
     def show_album(self, *_):
@@ -940,7 +1061,7 @@ class MainWindow(QMainWindow):
     def findings(self):
         rows = []
         for album in self.inventory.albums:
-            for issue in list(dict.fromkeys(album.issues + audit_album(album))):
+            for issue in album_issues(album):
                 rows.append({"catégorie": "Audit local", "dossier": album.path, "statut": "À vérifier", "motif": issue})
             for track in album.tracks:
                 rows.append({"catégorie": "Inventaire", "dossier": album.path, "champ": "fichier", "actuel": track.path,

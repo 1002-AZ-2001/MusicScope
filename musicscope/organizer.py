@@ -46,6 +46,7 @@ class FileEntry:
     inode: int
     nlink: int = 1
     sha256: str = ""
+    ctime_ns: int = 0  # relevé rapide : détecte un contenu réécrit à taille et date égales
 
 
 @dataclass
@@ -121,7 +122,9 @@ def _version(info):
     return info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino
 
 
-def _snapshot(source: Path, cancel=None) -> list[FileEntry]:
+def _snapshot(source: Path, cancel=None, hashed: bool = True) -> list[FileEntry]:
+    """État de l'arborescence. `hashed=False` relève seulement taille, date et identité : assez
+    pour revérifier un dossier déjà haché, sans relire tout l'album sur le NAS."""
     _check_ancestors(source)
     entries: list[FileEntry] = []
     pending = [source]
@@ -135,7 +138,8 @@ def _snapshot(source: Path, cancel=None) -> list[FileEntry]:
         if not stat.S_ISDIR(initial.st_mode):
             raise OrganizeError(f"Dossier remplacé pendant la prévisualisation : {folder}")
         entries.append(FileEntry(str(folder.relative_to(source)), "directory", 0,
-                                 initial.st_mtime_ns, initial.st_dev, initial.st_ino, initial.st_nlink))
+                                 initial.st_mtime_ns, initial.st_dev, initial.st_ino, initial.st_nlink,
+                                 ctime_ns=initial.st_ctime_ns))
         with os.scandir(folder) as iterator:
             for item in iterator:
                 check_cancel(cancel)
@@ -149,9 +153,10 @@ def _snapshot(source: Path, cancel=None) -> list[FileEntry]:
                 if stat.S_ISDIR(info.st_mode):
                     pending.append(path)
                 elif stat.S_ISREG(info.st_mode):
-                    digest = _hash_file(path, info, cancel)
+                    digest = _hash_file(path, info, cancel) if hashed else ""
                     entries.append(FileEntry(str(path.relative_to(source)), "file", info.st_size,
-                                             info.st_mtime_ns, info.st_dev, info.st_ino, info.st_nlink, digest))
+                                             info.st_mtime_ns, info.st_dev, info.st_ino, info.st_nlink, digest,
+                                             info.st_ctime_ns))
                 else:
                     raise OrganizeError(f"Fichier spécial interdit : {path}")
         final = folder.lstat()
@@ -161,8 +166,16 @@ def _snapshot(source: Path, cancel=None) -> list[FileEntry]:
 
 
 def _fingerprint(entries: list[FileEntry]) -> str:
-    payload = json.dumps([asdict(entry) for entry in entries], sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    # ctime_ns exclu : l'empreinte des journaux écrits par les versions précédentes reste valable.
+    payload = json.dumps([{key: value for key, value in asdict(entry).items() if key != "ctime_ns"}
+                          for entry in entries], sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _metadata(entries: list[FileEntry]) -> list[tuple]:
+    """Tout sauf le SHA-256 : comparaison d'un relevé rapide avec un relevé haché."""
+    return [(entry.relative_path, entry.kind, entry.size, entry.mtime_ns, entry.device, entry.inode, entry.nlink,
+             entry.ctime_ns if entry.kind == "file" else 0) for entry in entries]
 
 
 def _content_fingerprint(entries: list[FileEntry]) -> str:
@@ -471,9 +484,13 @@ def apply_plan(plan: MovePlan, journal_dir: str | Path, confirmed: bool = False,
         raise OrganizeError("Déplacement entre volumes refusé.")
     if _collision(destination):
         raise OrganizeError("Destination déjà présente : aucun remplacement autorisé.")
-    current = _snapshot(source)
-    if not plan.fingerprint or _fingerprint(current) != plan.fingerprint:
+    # Le contenu a été haché à la prévisualisation : taille, date et identité inchangées suffisent.
+    if not plan.fingerprint or _fingerprint(plan.files) != plan.fingerprint:
+        raise OrganizeError("Plan invalide : générer un nouveau plan.")
+    current = _snapshot(source, hashed=False)
+    if _metadata(current) != _metadata(plan.files):
         raise OrganizeError("Le dossier a changé depuis la prévisualisation : générer un nouveau plan.")
+    current = plan.files
     hardlinked = sum(entry.kind == "file" and entry.nlink > 1 for entry in current)
     if hardlinked and not allow_hardlinks:
         raise OrganizeError("Des liens physiques sont présents : accord distinct obligatoire.")
@@ -488,7 +505,7 @@ def apply_plan(plan: MovePlan, journal_dir: str | Path, confirmed: bool = False,
     try:
         _mkdir_safe(destination.parent)
         # Revalidation après la préparation des dossiers/journal.
-        if _fingerprint(_snapshot(source)) != plan.fingerprint:
+        if _metadata(_snapshot(source, hashed=False)) != _metadata(plan.files):
             raise OrganizeError("Le dossier a changé avant le renommage.")
         _rename_without_replace(source, destination, (plan.source_device, plan.source_inode))
         record["state"] = "applied"
@@ -563,13 +580,14 @@ def restore_journal(journal_path: str | Path, confirmed: bool = False) -> Path:
     # vérifié est bien celui qui est déplacé, même si son inode diffère de celui du journal.
     info = destination.lstat()
     current = (info.st_dev, info.st_ino)
-    if _content_fingerprint(_snapshot(destination)) != content:
+    verified = _snapshot(destination)
+    if _content_fingerprint(verified) != content:
         raise OrganizeError("Le dossier déplacé a changé depuis l'opération : restauration automatique refusée.")
     record["state"] = "restoring"
     _save_journal(journal, record)
     try:
         _mkdir_safe(source.parent)
-        if _content_fingerprint(_snapshot(destination)) != content:
+        if _metadata(_snapshot(destination, hashed=False)) != _metadata(verified):
             raise OrganizeError("Le dossier a changé avant la restauration.")
         _rename_without_replace(destination, source, current)
         record["state"] = "restored"

@@ -37,6 +37,11 @@ ALIASES = {
     "genre": ["genre", "TCON", "©gen"],
 }
 
+_ALIAS_KEYS = {canonical: [_key(alias) for alias in aliases] for canonical, aliases in ALIASES.items()}
+# Pochettes (ID3 APIC, MP4 covr), données privées et objets encapsulés : sans alias.
+_BINARY_PREFIXES = ("APIC", "PRIV", "GEOB", "MCDI", "SYLT", "RVA2", "POPM", "PCNT")
+_BINARY_KEYS = {"covr", "metadata_block_picture"}
+
 
 def _strings(value) -> list[str]:
     if hasattr(value, "text"):
@@ -61,6 +66,8 @@ def canonical_tags(native) -> dict[str, list[str]]:
     special = {"©nam": "title", "©alb": "album", "©ART": "artist", "©day": "date", "©gen": "genre"}
     for raw_key, raw_value in native.items():
         key = str(raw_key)
+        if key.startswith(_BINARY_PREFIXES) or key in _BINARY_KEYS:
+            continue  # pochettes et données binaires : jamais lues, coûteuses à convertir en texte
         if key.startswith("UFID:"):
             if key.removeprefix("UFID:").rstrip("/") == "http://musicbrainz.org":
                 values["musicbrainztrackid"] = _strings(raw_value.data)
@@ -83,10 +90,10 @@ def canonical_tags(native) -> dict[str, list[str]]:
         key = _key(special.get(key, key))
         values.setdefault(key, []).extend(_strings(raw_value))
     tags = {}
-    for canonical, aliases in ALIASES.items():
-        for alias in aliases:
-            if values.get(_key(alias)):
-                tags[canonical] = list(dict.fromkeys(values[_key(alias)]))
+    for canonical, keys in _ALIAS_KEYS.items():
+        for alias in keys:
+            if values.get(alias):
+                tags[canonical] = list(dict.fromkeys(values[alias]))
                 break
     for prefix in ("track", "disc"):
         number = tags.get(prefix + "number", [""])[0]

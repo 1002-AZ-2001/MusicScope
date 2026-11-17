@@ -5,7 +5,8 @@ import os
 import errno
 import re
 import stat as stat_module
-from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
+import time
+from concurrent.futures import FIRST_COMPLETED, CancelledError, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
@@ -62,59 +63,27 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
         raise ValueError("Le cache doit être situé hors de la médiathèque")
     if is_link(root) or not root.is_dir():
         raise ScanUnavailable(f"Racine inaccessible ou lien ignoré : {root}")
-    found: list[tuple[Path, os.stat_result]] = []
-    traversal_errors: list[str] = []
-    skipped: list[str] = []
-    pending = [root]
-    while pending:
-        check_cancel(cancel)
-        directory = pending.pop()
-        try:
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    check_cancel(cancel)
-                    path = Path(entry.path)
-                    if is_link(path) or (directory == root and entry.name == QUARANTINE_DIR):
-                        continue
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            pending.append(path)
-                            continue
-                        if path.suffix.casefold() not in AUDIO_EXTENSIONS:
-                            continue  # pochettes, .nfo, .part… : jamais lus, leurs erreurs sont sans effet
-                        info = entry.stat(follow_symlinks=False)
-                        if stat_module.S_ISREG(info.st_mode):
-                            found.append((path, info))
-                    except FileNotFoundError:
-                        continue  # disparu entre la lecture du dossier et son examen (fichier temporaire)
-                    except OSError as exc:
-                        traversal_errors.append(f"{path} : {exc}")
-        except PermissionError as exc:
-            if directory == root:
-                traversal_errors.append(f"{directory} : {exc}")
-            else:
-                # Dossier interdit (ex. @eaDir d'un NAS) : signalé, sans perdre le reste du scan.
-                skipped.append(f"Dossier illisible ignoré : {directory} : {exc}")
-        except FileNotFoundError:
-            if directory == root:
-                traversal_errors.append(f"{directory} : racine disparue")
-        except OSError as exc:
-            traversal_errors.append(f"{directory} : {exc}")
-        if progress:
-            progress(0, 0, f"Découverte : {directory}")
-    if traversal_errors:
-        raise ScanUnavailable("Parcours incomplet ; inventaire précédent conservé.\n" + "\n".join(traversal_errors))
-
-    inventory = Inventory(str(root), scanned_at=datetime.now(timezone.utc).isoformat())
-    inventory.errors.extend(skipped)
-    albums: dict[Path, Album] = {}
-    grouped_folders: dict[Path, set[Path]] = {}
-    mounts = MountCache()
+    progress = _throttled(progress)
+    mounts = MountCache(root=root)
     if workers is None:
         workers = auto_workers(root, mounts)
-    with cache.deferred_commits():
-        unstable_source = _read_tracks(root, found, cache, mounts, inventory, albums,
-                                       grouped_folders, cancel, progress, workers)
+    pool = (None if workers == 1
+            else ThreadPoolExecutor(max_workers=workers, thread_name_prefix="musicscope-scan"))
+    inventory = Inventory(str(root), scanned_at=datetime.now(timezone.utc).isoformat())
+    albums: dict[Path, Album] = {}
+    grouped_folders: dict[Path, set[Path]] = {}
+    try:
+        found, traversal_errors, skipped = _discover(root, pool, cancel, progress)
+        if traversal_errors:
+            raise ScanUnavailable("Parcours incomplet ; inventaire précédent conservé.\n" + "\n".join(traversal_errors))
+        inventory.errors.extend(skipped)
+        with cache.deferred_commits():
+            unstable_source = _read_tracks(root, found, cache, mounts, inventory, albums,
+                                           grouped_folders, cancel, progress, pool)
+    finally:
+        if pool is not None:
+            # Annulation ou erreur : les lectures non commencées sont abandonnées.
+            pool.shutdown(wait=True, cancel_futures=True)
     for folder, album in sorted(albums.items()):
         if folder in grouped_folders[folder] and len(grouped_folders[folder]) > 1:
             album.issues.append("Regroupement ambigu : pistes à la racine de l'album et dans des sous-dossiers de disques")
@@ -142,15 +111,95 @@ def scan(root: str | Path, cache: Cache, cancel: Event | None = None,
     return inventory
 
 
-def _probe(path: Path, initial: os.stat_result, cancel: Event | None) -> os.stat_result:
-    """Thread de lecture : le fichier doit être resté identique depuis la découverte."""
-    check_cancel(cancel)
-    if is_link(path):
-        raise OSError("Le fichier est devenu un lien pendant le scan")
-    current = path.stat(follow_symlinks=False)
-    if (current.st_size, current.st_mtime_ns) != (initial.st_size, initial.st_mtime_ns):
-        raise OSError("Le fichier a changé pendant le scan")
-    return current
+def _throttled(progress: Callable[[int, int, str], None] | None, interval: float = 0.1):
+    """Au plus une notification toutes les 100 ms, plus la dernière de chaque phase : une par
+    fichier inondait la file d'événements Qt et disputait le GIL aux threads de lecture."""
+    if progress is None:
+        return None
+    last = [0.0]
+
+    def notify(current: int, total: int, text: str) -> None:
+        now = time.monotonic()
+        if now - last[0] >= interval or (total and current >= total):
+            last[0] = now
+            progress(current, total, text)
+    return notify
+
+
+def _scan_directory(directory: Path, is_root: bool):
+    """Un dossier : sous-dossiers, fichiers audio (un seul lstat chacun), erreurs.
+
+    Le type des entrées vient de readdir (d_type) : ni les dossiers, ni les fichiers non
+    audio (pochettes, .nfo, .part) ne coûtent d'appel stat, précieux sur un partage réseau."""
+    folders, files, errors, skipped = [], [], [], []
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_symlink() or (hasattr(entry, "is_junction") and entry.is_junction()):
+                        continue
+                    if is_root and entry.name == QUARANTINE_DIR:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        folders.append(Path(entry.path))
+                        continue
+                    if os.path.splitext(entry.name)[1].casefold() not in AUDIO_EXTENSIONS:
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    if stat_module.S_ISREG(info.st_mode):
+                        files.append((Path(entry.path), info))
+                except FileNotFoundError:
+                    continue  # disparu entre la lecture du dossier et son examen (fichier temporaire)
+                except OSError as exc:
+                    errors.append(f"{entry.path} : {exc}")
+    except PermissionError as exc:
+        if is_root:
+            errors.append(f"{directory} : {exc}")
+        else:
+            # Dossier interdit (ex. @eaDir d'un NAS) : signalé, sans perdre le reste du scan.
+            skipped.append(f"Dossier illisible ignoré : {directory} : {exc}")
+    except FileNotFoundError:
+        if is_root:
+            errors.append(f"{directory} : racine disparue")
+    except OSError as exc:
+        errors.append(f"{directory} : {exc}")
+    return folders, files, errors, skipped
+
+
+def _discover(root: Path, pool: ThreadPoolExecutor | None, cancel: Event | None,
+              progress: Callable[[int, int, str], None] | None):
+    """Parcours niveau par niveau ; sur un partage réseau, les dossiers d'un même niveau sont
+    lus en parallèle (la latence de chaque readdir se recouvre)."""
+    found: list[tuple[Path, os.stat_result]] = []
+    errors: list[str] = []
+    skipped: list[str] = []
+    level = [root]
+    seen = 0
+    while level:
+        check_cancel(cancel)
+        if pool is None:
+            results = []
+            for directory in level:
+                check_cancel(cancel)
+                results.append(_scan_directory(directory, directory == root))
+                seen += 1
+                if progress:
+                    progress(0, 0, f"Découverte : {directory}")
+        else:
+            results = []
+            for result in pool.map(lambda directory: _scan_directory(directory, directory == root), level):
+                check_cancel(cancel)  # les lectures restantes sont abandonnées à la fermeture du pool
+                results.append(result)
+                seen += 1
+                if progress:
+                    progress(0, 0, f"Découverte : {seen} dossiers")
+        level = []
+        for folders, files, folder_errors, folder_skipped in results:
+            level.extend(folders)
+            found.extend(files)
+            errors.extend(folder_errors)
+            skipped.extend(folder_skipped)
+    return found, errors, skipped
 
 
 def _read(path: Path, current: os.stat_result, cancel: Event | None) -> Track:
@@ -191,16 +240,34 @@ def _collect(pool: ThreadPoolExecutor | None, function: Callable, jobs: list[tup
                 break
         check_cancel(cancel)
         return
-    futures = {pool.submit(function, *args): index for index, args in jobs}
+    # Fenêtre glissante : quelques tâches en vol par thread, au lieu d'un objet Future par
+    # fichier créé d'avance (≈ 190 Mio pour 96 585 fichiers) ; l'annulation est immédiate.
+    window = max(1, pool._max_workers * 4)
+    queue = iter(jobs)
+    running: dict = {}
     cancelled = False
-    for future in as_completed(futures):
-        if not deliver(futures[future], future.result):
-            cancelled = True
-            continue
+
+    def refill() -> None:
+        while len(running) < window and not cancelled:
+            try:
+                index, args = next(queue)
+            except StopIteration:
+                return
+            running[pool.submit(function, *args)] = index
+
+    refill()
+    while running:
+        finished, _ = wait(running, return_when=FIRST_COMPLETED)
+        for future in finished:
+            index = running.pop(future)
+            if not deliver(index, future.result):
+                cancelled = True
         if not cancelled and cancel is not None and cancel.is_set():
             cancelled = True
-            for pending in futures:
-                pending.cancel()
+        if cancelled:
+            for future in running:
+                future.cancel()
+        refill()
     if cancelled:
         raise ScanCancelled("Analyse annulée")
     check_cancel(cancel)
@@ -209,12 +276,15 @@ def _collect(pool: ThreadPoolExecutor | None, function: Callable, jobs: list[tup
 def _read_tracks(root: Path, found: list[tuple[Path, os.stat_result]], cache: Cache,
                  mounts: MountCache, inventory: Inventory, albums: dict[Path, Album],
                  grouped_folders: dict[Path, set[Path]], cancel: Event | None,
-                 progress: Callable[[int, int, str], None] | None, workers: int) -> bool:
-    """Lit ou réutilise les pistes ; renvoie vrai si la source a été instable."""
-    ordered = sorted(found)
-    total = len(ordered)
-    currents: list[os.stat_result | None] = [None] * total
-    outcomes: list[Track | Exception | None] = [None] * total
+                 progress: Callable[[int, int, str], None] | None, pool: ThreadPoolExecutor | None) -> bool:
+    """Lit ou réutilise les pistes ; renvoie vrai si la source a été instable.
+
+    L'état relevé à la découverte suffit pour interroger le cache ; seules les pistes
+    absentes du cache sont lues, puis revérifiées après lecture (voir `_read`)."""
+    ordered = sorted(found, key=lambda item: item[0])
+    currents: list[os.stat_result] = [info for _, info in ordered]
+    outcomes: list[Track | Exception | None] = [None] * len(ordered)
+    misses: list[int] = []
     done = 0
 
     def failed(index: int, exc: Exception) -> None:
@@ -222,51 +292,32 @@ def _read_tracks(root: Path, found: list[tuple[Path, os.stat_result]], cache: Ca
         outcomes[index] = exc
         done += 1
         if progress:
-            progress(done, total, str(ordered[index][0]))
-
-    def probed(index: int, current: os.stat_result) -> None:
-        nonlocal done
-        currents[index] = current
-        done += 1
-        if progress:
-            progress(done, total, f"Vérification : {ordered[index][0]}")
+            progress(done, len(misses), str(ordered[index][0]))
 
     def read(index: int, track: Track) -> None:
         nonlocal done
-        cache.put_track(track)
+        cache.put_track(track, currents[index].st_ctime_ns)
         outcomes[index] = track
         done += 1
         if progress:
             progress(done, len(misses), str(ordered[index][0]))
 
-    pool = (None if workers == 1
-            else ThreadPoolExecutor(max_workers=workers, thread_name_prefix="musicscope-scan"))
-    try:
-        _collect(pool, _probe, [(index, (path, initial, cancel)) for index, (path, initial) in enumerate(ordered)],
-                 cancel, probed, failed)
-        misses = []
-        for index, (path, _) in enumerate(ordered):
-            check_cancel(cancel)
-            current = currents[index]
-            if current is None:
-                continue
-            try:
-                track = cache.get_track(path, current)
-            except UnicodeEncodeError:
-                # Nom de fichier non UTF-8 (octets invalides) : illisible pour le cache, signalé seul.
-                outcomes[index] = ValueError("Nom de fichier non UTF-8 : renommez-le pour l’analyser")
-                continue
-            if track is None:
-                misses.append(index)
-            else:
-                outcomes[index] = track
-        done = 0
-        _collect(pool, _read, [(index, (ordered[index][0], currents[index], cancel)) for index in misses],
-                 cancel, read, failed)
-    finally:
-        if pool is not None:
-            # Annulation ou erreur : les lectures non commencées sont abandonnées.
-            pool.shutdown(wait=True, cancel_futures=True)
+    for index, (path, current) in enumerate(ordered):
+        check_cancel(cancel)
+        if progress:
+            progress(index + 1, len(ordered), f"Cache : {path}")
+        try:
+            track = cache.get_track(path, current)
+        except UnicodeEncodeError:
+            # Nom de fichier non UTF-8 (octets invalides) : illisible pour le cache, signalé seul.
+            outcomes[index] = ValueError("Nom de fichier non UTF-8 : renommez-le pour l’analyser")
+            continue
+        if track is None:
+            misses.append(index)
+        else:
+            outcomes[index] = track
+    _collect(pool, _read, [(index, (ordered[index][0], currents[index], cancel)) for index in misses],
+             cancel, read, failed)
 
     unstable_source = False
     for index, (path, _) in enumerate(ordered):

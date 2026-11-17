@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
 import math
 import os
@@ -38,6 +39,12 @@ class Session:
 def _path(value):
     if not isinstance(value, str) or not value or len(value) > 32768 or "\0" in value:
         raise ValueError("Chemin de session invalide.")
+    return _parsed(value)
+
+
+@lru_cache(maxsize=1 << 19)
+def _parsed(value: str):
+    """Analyse mémorisée : une session de 96 585 pistes demandait 1,86 million d'analyses."""
     windows = bool(re.match(r"^[a-zA-Z]:|^\\\\|^//", value))
     parsed = PureWindowsPath(value) if windows else PurePosixPath(value)
     if not parsed.is_absolute() or ".." in parsed.parts:
@@ -47,6 +54,7 @@ def _path(value):
 
 def _contained(value: str, parent: str):
     child, root = _path(value), _path(parent)
+    # is_relative_to : comparaison insensible à la casse pour les chemins Windows (\\NAS = \\nas).
     return type(child) is type(root) and child.is_relative_to(root)
 
 

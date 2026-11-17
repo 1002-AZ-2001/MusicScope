@@ -6,6 +6,7 @@ chemin serveur non résolu ne devient jamais une preuve d'absence du catalogue.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from http.client import HTTPException
 import json
 import os
@@ -91,7 +92,14 @@ def _server_parts(value: str) -> tuple[bool, tuple[str, ...], tuple[str, ...]] |
     return windows, normalized, parts
 
 
-def map_server_path(server_path: str, mappings: list[PathMapping]) -> tuple[str | None, str]:
+@lru_cache(maxsize=256)
+def _prefix_parts(prefix: str):
+    """Préfixe d'une correspondance, analysé une fois pour tout le catalogue."""
+    return _server_parts(prefix)
+
+
+def map_server_path(server_path: str, mappings: list[PathMapping],
+                    resolved: dict[str, Path] | None = None) -> tuple[str | None, str]:
     """Appliquer le préfixe le plus précis, en respectant les limites de dossier.
 
     Deux destinations différentes pour le même préfixe restent ambiguës. Les
@@ -103,7 +111,7 @@ def map_server_path(server_path: str, mappings: list[PathMapping]) -> tuple[str 
     windows, parts, original = source
     matches = []
     for mapping in mappings:
-        prefix = _server_parts(mapping.server_prefix)
+        prefix = _prefix_parts(mapping.server_prefix)
         if prefix is None or prefix[0] != windows:
             continue
         normalized = prefix[1]
@@ -118,7 +126,9 @@ def map_server_path(server_path: str, mappings: list[PathMapping]) -> tuple[str 
             # Seul le dossier parent est résolu : un lien symbolique en dernier composant est
             # ensuite classé « Lien local ignoré », sans bloquer tout le diagnostic.
             checked = target.parent if suffix else target
-            if not checked.resolve().is_relative_to(local.resolve()):
+            # `resolved` garde les dossiers déjà résolus pendant un diagnostic : un resolve() relit
+            # chaque composant du chemin (≈ 19 lstat par élément sur le partage).
+            if not _resolve(checked, resolved).is_relative_to(_resolve(local, resolved)):
                 return None, "La correspondance sortirait du dossier local configuré."
         except (OSError, RuntimeError, ValueError):
             return None, "La destination locale ne peut pas être résolue."
@@ -130,6 +140,15 @@ def map_server_path(server_path: str, mappings: list[PathMapping]) -> tuple[str 
     if len({match[1] for match in best}) != 1:
         return None, "Plusieurs correspondances de même priorité proposent des destinations différentes."
     return best[0][2], "Correspondance explicite par le préfixe le plus précis."
+
+
+def _resolve(path: Path, cache: dict[str, Path] | None) -> Path:
+    if cache is None:
+        return path.resolve()
+    key = str(path)
+    if key not in cache:
+        cache[key] = path.resolve()
+    return cache[key]
 
 
 def _path_key(path: str) -> str:
@@ -176,6 +195,7 @@ class JellyfinClient:
         self.opener = build_opener(_SameOriginRedirect()).open if opener is urlopen else opener
         self.page_size, self.max_pages = page_size, max_pages
         self.attempts, self.timeout, self._sleep = 3, 20, time.sleep
+        self.last_libraries: list[Library] = []
 
     def _headers(self, authenticated: bool = True) -> dict[str, str]:
         from . import __version__
@@ -220,7 +240,7 @@ class JellyfinClient:
         if not isinstance(info, dict):
             raise JellyfinUnavailable("Réponse Jellyfin illisible.")
         result = ServerInfo(str(info.get("ServerName", "")), str(info.get("Version", "")))
-        self.libraries()
+        self.last_libraries = self.libraries()  # valide la clé ; réutilisé par le test de connexion
         return result
 
     def libraries(self) -> list[Library]:
@@ -332,10 +352,11 @@ class JellyfinClient:
         server_keys = set()
         mapped_keys = set()
         unresolved = False
+        resolved: dict[str, Path] = {}
         for index, item in enumerate(items, 1):
             check_cancel(cancel)
             server = item.get("Path", "")
-            target, reason = map_server_path(server, mappings)
+            target, reason = map_server_path(server, mappings, resolved)
             finding = JellyfinFinding("", server, target or "", item.get("Id", ""), item.get("Name", ""), reason)
             parsed = _server_parts(server)
             server_key = (parsed[0], parsed[1]) if parsed else None
