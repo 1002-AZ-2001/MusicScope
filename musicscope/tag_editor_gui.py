@@ -122,7 +122,7 @@ class TagEditorDialog(QDialog):
 class TagPreviewDialog(QDialog):
     """Différences avant/après ; l'écriture demande encore ce bouton explicite."""
 
-    def __init__(self, edits: list[FileEdit], parent=None):
+    def __init__(self, edits: list[FileEdit], parent=None, linked: int = 0):
         super().__init__(parent)
         self.setWindowTitle("Aperçu des modifications de tags")
         self.resize(900, 520)
@@ -130,7 +130,10 @@ class TagPreviewDialog(QDialog):
         rows = describe(edits)
         summary = QLabel(f"{len(rows)} modification(s) sur {len(edits)} fichier(s). Les valeurs d’origine sont "
                          "enregistrées dans le journal avant l’écriture ; la modification pourra être annulée "
-                         "depuis la page Journal des tags.")
+                         "depuis la page Journal des tags."
+                         + (f"\n\n⚠ {linked} fichier(s) liés physiquement (qBittorrent, Lidarr) sont exclus : "
+                            "modifier leurs tags modifierait aussi la copie partagée et casserait le partage."
+                            if linked else ""))
         summary.setWordWrap(True)
         layout.addWidget(summary)
         self.table = QTableWidget(len(rows), 4)

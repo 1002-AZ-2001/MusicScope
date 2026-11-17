@@ -5,8 +5,13 @@ C'est la seule partie de MusicScope qui écrit dans les fichiers audio. Chaque
 
 1. le fichier doit avoir la taille et la date relevées par le dernier scan ;
 2. les valeurs d'origine sont enregistrées dans le journal SQLite (validé) ;
-3. les tags sont écrits, puis relus et comparés aux valeurs demandées ;
-4. en cas d'écart, les valeurs d'origine sont réécrites.
+3. les tags sont écrits sur une copie du fichier, dans le même dossier, puis relus et
+   comparés aux valeurs demandées ;
+4. seulement si tout concorde, la copie remplace l'original (renommage atomique) ;
+   sinon l'original n'a jamais été touché.
+
+Un fichier lié physiquement (qBittorrent, Lidarr) n'est jamais modifié : changer ses
+tags modifierait aussi la copie partagée.
 
 L'annulation réécrit les valeurs d'origine, seulement si le fichier porte
 encore les valeurs écrites par MusicScope.
@@ -15,16 +20,16 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 from typing import Callable
+from uuid import uuid4
 
 import mutagen
-from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, ID3NoHeaderError
 
 from .models import Album
 
@@ -98,28 +103,39 @@ def plan_album_edits(album: Album, album_values: dict[str, str],
     return edits
 
 
-class _Tags:
-    """Interface « easy » de Mutagen, avec conservation de la version ID3."""
+# Cadres ID3v2.4 que mutagen retire en enregistrant au format v2.3 (update_to_v23) : tri
+# (TSOP, TSOA, TSOT), dates (TDOR, TDRL), ReplayGain (RVA2)… Ils sont remis tels quels,
+# comme le conseille la documentation de mutagen. TDRC (date éditable), TIPL et TMCL ont un
+# équivalent v2.3 (TYER/TDAT, IPLS) et sont convertis normalement.
+_V24_KEPT = ("ASPI", "EQU2", "RVA2", "SEEK", "SIGN", "TDEN", "TDOR", "TDRL", "TDTG", "TMOO", "TPRO",
+             "TSOA", "TSOP", "TSOT", "TSST")
+_MP4_NUMBERS = {"tracknumber", "discnumber"}
 
-    def __init__(self, path: Path):
-        self.path = path
-        self.id3_version = None
-        audio = mutagen.File(path)
+
+class _Tags:
+    """Interface « easy » de Mutagen, avec conservation de la version ID3.
+
+    `kind` (classe Mutagen) permet d'ouvrir une copie temporaire dont l'extension ne
+    permet pas de deviner le format."""
+
+    def __init__(self, path: Path, kind=None):
+        self.path = Path(path)
+        audio = kind(self.path) if kind is not None else mutagen.File(self.path, easy=True)
         if audio is None:
             raise ValueError("Format audio non reconnu")
-        if type(audio).__name__ == "MP3":
-            try:
-                self.id3_version = ID3(path).version[1]
-                self.tags = EasyID3(path)
-            except ID3NoHeaderError:
+        self.audio, self.kind_class = audio, type(audio)
+        self.kind = type(audio).__name__.removeprefix("Easy")
+        self.id3_version = None
+        if audio.tags is None:
+            audio.add_tags()
+            if self.kind == "MP3":
                 self.id3_version = 4
-                self.tags = EasyID3()
-        else:
-            audio = mutagen.File(path, easy=True)
-            if audio.tags is None:
-                audio.add_tags()
-            self.tags = audio
-        self.kind = type(audio).__name__
+        elif self.kind == "MP3":
+            self.id3_version = self._id3().version[1]
+        self.tags = audio.tags
+
+    def _id3(self):
+        return getattr(self.audio.tags, "_EasyID3__id3", None)  # ID3 sous-jacent d'EasyID3
 
     def get(self, key: str) -> list[str]:
         try:
@@ -128,35 +144,140 @@ class _Tags:
             return []
 
     def normalized(self, key: str, values: list[str]) -> list[str]:
-        """Valeurs telles que ce format les relira (ID3v2.3 n'a qu'un texte par cadre)."""
+        """Valeurs telles que ce format les relira (ID3v2.3 n'a qu'un texte par cadre ;
+        un numéro M4A garde le total déjà présent)."""
         if self.id3_version == 3 and len(values) > 1:
             return [join_values(values)]
+        if self.kind == "MP4" and key in _MP4_NUMBERS and len(values) == 1 and "/" not in values[0]:
+            current = self.get(key)
+            if current and "/" in current[0]:
+                total = current[0].split("/", 1)[1]
+                if total.strip() not in {"", "0"}:
+                    return [f"{values[0]}/{total}"]
         return list(values)
 
-    def set(self, key: str, values: list[str]) -> None:
+    def aliases(self, key: str) -> list[str]:
+        """Autres noms Vorbis du même champ (ex. « ALBUM ARTIST ») que le scanner lit aussi."""
+        from .metadata import ALIASES, _key
+        if self.kind not in {"FLAC", "OggVorbis", "OggOpus", "OggFLAC", "OggSpeex"} or key not in ALIASES:
+            return []
+        # « album artist » et « albumartist » ont la même clé normalisée : comparer les noms bruts.
+        wanted = {_key(alias) for alias in ALIASES[key]}
+        return [name for name in list(self.tags.keys())
+                if _key(name) in wanted and name.casefold() != key.casefold()]
+
+    def snapshot(self, keys) -> dict[str, list[str]]:
+        """Valeurs actuelles des champs, et de leurs variantes qui seront retirées."""
+        values = {key: self.get(key) for key in keys}
+        for key in keys:
+            for alias in self.aliases(key):
+                values.setdefault(alias, self.get(alias))
+        return values
+
+    def set(self, key: str, values: list[str]) -> list[str]:
+        """Écrit le champ, retire ses variantes, et renvoie les valeurs attendues à la relecture."""
         values = self.normalized(key, values)
+        for alias in self.aliases(key):
+            del self.tags[alias]
         if values:
             self.tags[key] = values
         elif key in self.tags:
             del self.tags[key]
+        return values
 
-    def save(self) -> None:
-        if self.id3_version is not None:
-            self.tags.save(self.path, v2_version=3 if self.id3_version == 3 else 4)
-        else:
-            self.tags.save()
+    def save(self, target: Path | None = None) -> None:
+        target = Path(target or self.path)
+        if self.id3_version is None:
+            self.audio.save(target)
+            return
+        id3 = self._id3()
+        if id3 is None:  # interne de mutagen inattendu : comportement d'origine
+            self.tags.save(target, v2_version=3 if self.id3_version == 3 else 4)
+            return
+        if self.id3_version != 3:
+            id3.save(target, v2_version=4)
+            return
+        import copy
+        kept = [copy.deepcopy(frame) for name in _V24_KEPT for frame in id3.getall(name)]
+        had_original_year = bool(id3.getall("TORY"))
+        id3.update_to_v23()
+        for frame in kept:
+            id3.add(frame)
+        if any(frame.FrameID == "TDOR" for frame in kept) and not had_original_year:
+            id3.delall("TORY")  # TDOR complet remis : pas de doublon d'année ajouté
+        # Séparateur nul : les valeurs multiples des champs non modifiés restent séparées.
+        id3.save(target, v2_version=3, v23_sep=None)
 
 
-def _write(path: Path, values: dict[str, list[str]]) -> None:
-    """Écrit puis relit ; lève ValueError si le fichier ne porte pas les valeurs demandées."""
-    tags = _Tags(path)
-    for key, new in values.items():
-        tags.set(key, new)
-    tags.save()
-    check = _Tags(path)
-    for key, new in values.items():
-        if check.get(key) != tags.normalized(key, new):
-            raise ValueError(f"Relecture différente pour {key} : {check.get(key)!r}")
+def _temporary_copy(path: Path) -> Path:
+    """Copie de travail dans le même dossier (même volume, donc remplacement atomique).
+    Son extension n'est pas audio : une copie oubliée n'est jamais inventoriée."""
+    temporary = path.with_name(f".{path.name}.{uuid4().hex[:12]}.musicscope-tmp")
+    shutil.copy2(path, temporary)
+    return temporary
+
+
+def _write(path: Path, values: dict[str, list[str]], source: _Tags | None = None) -> None:
+    """Écrit sur une copie, la relit, puis la substitue au fichier d'origine.
+
+    Une coupure (réseau, alimentation) pendant l'écriture ne touche que la copie : le
+    fichier d'origine reste intact jusqu'au remplacement final, qui est atomique.
+    Lève ValueError si la copie ne porte pas les valeurs demandées."""
+    path = Path(path)
+    source = source or _Tags(path)
+    before = path.stat()
+    if before.st_nlink > 1:
+        raise ValueError(LINKED_MESSAGE)
+    temporary = _temporary_copy(path)
+    try:
+        tags = _Tags(temporary, source.kind_class)
+        expected = {key: tags.set(key, new) for key, new in values.items()}
+        tags.save()
+        check = _Tags(temporary, source.kind_class)
+        for key, new in expected.items():
+            if check.get(key) != new:
+                raise ValueError(f"Relecture différente pour {key} : {check.get(key)!r}")
+            leftover = [alias for alias in check.aliases(key) if alias not in values]
+            if leftover:
+                raise ValueError(f"Variante de {key} restée en place : {leftover!r}")
+        _same_audio(source.audio, check.audio)
+        current = path.stat()
+        if (current.st_size, current.st_mtime_ns, current.st_ino) != (before.st_size, before.st_mtime_ns, before.st_ino):
+            raise ValueError("Fichier modifié pendant l’écriture ; rien n’a été remplacé")
+        try:
+            os.chown(temporary, before.st_uid, before.st_gid)
+        except (OSError, AttributeError):
+            pass  # propriétaire imposé par le montage (SMB) ou droits insuffisants
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _same_audio(before, after) -> None:
+    """La partie audio relue doit avoir les mêmes caractéristiques que l'original."""
+    left, right = before.info, after.info
+    for name in ("sample_rate", "channels", "bits_per_sample"):
+        if getattr(left, name, None) != getattr(right, name, None):
+            raise ValueError(f"Caractéristique audio modifiée ({name}) ; rien n’a été remplacé")
+    if abs((getattr(left, "length", 0) or 0) - (getattr(right, "length", 0) or 0)) > 0.05:
+        raise ValueError("Durée audio modifiée ; rien n’a été remplacé")
+
+
+LINKED_MESSAGE = ("Fichier lié physiquement (qBittorrent, Lidarr) : écriture refusée pour ne pas modifier la "
+                  "copie partagée")
+
+
+def linked_paths(edits: list[FileEdit]) -> list[str]:
+    """Fichiers à plusieurs liens physiques : leurs tags ne sont jamais modifiés."""
+    result = []
+    for edit in edits:
+        try:
+            if os.stat(edit.path, follow_symlinks=False).st_nlink > 1:
+                result.append(edit.path)
+        except OSError:
+            continue
+    return result
 
 
 class TagJournal:
@@ -212,8 +333,10 @@ class TagJournal:
                 stat = path.stat()
                 if (stat.st_size, stat.st_mtime_ns) != (edit.size, edit.mtime_ns):
                     raise ValueError("Fichier modifié depuis l’analyse ; relancez l’analyse")
+                if stat.st_nlink > 1:
+                    raise ValueError(LINKED_MESSAGE)
                 tags = _Tags(path)
-                old = {key: tags.get(key) for key in edit.changes}
+                old = tags.snapshot(edit.changes)
             except (OSError, ValueError, mutagen.MutagenError) as exc:
                 result.failed.append((edit.path, str(exc)))
                 continue
@@ -222,15 +345,10 @@ class TagJournal:
                 self.db.execute("INSERT INTO tag_entries VALUES (?, ?, ?, ?, 'pending', '')",
                                 (batch_id, edit.path, json.dumps(old), json.dumps(edit.changes)))
             try:
-                _write(path, edit.changes)
+                _write(path, edit.changes, tags)
             except (OSError, ValueError, mutagen.MutagenError) as exc:
-                error = str(exc)
-                try:
-                    _write(path, old)
-                    status = "failed_restored"
-                except (OSError, ValueError, mutagen.MutagenError) as restore_error:
-                    status = "failed"
-                    error += f" ; restauration impossible : {restore_error}"
+                # L'écriture se fait sur une copie : le fichier d'origine n'a pas été remplacé.
+                error, status = str(exc), "failed_restored"
                 with self.db:
                     self.db.execute("UPDATE tag_entries SET status=?, error=? WHERE batch_id=? AND path=?",
                                     (status, error, batch_id, edit.path))
@@ -277,12 +395,12 @@ class TagJournal:
                     raise ValueError("Lien ignoré")
                 tags = _Tags(path)
                 current = {key: tags.get(key) for key in new}
-                if current == {key: tags.normalized(key, values) for key, values in old.items()}:
+                if current == {key: tags.normalized(key, old.get(key, [])) for key in new}:
                     pass  # écriture interrompue avant modification : rien à restaurer
                 elif current != {key: tags.normalized(key, values) for key, values in new.items()}:
                     raise ValueError("Tags modifiés depuis l’écriture ; annulation refusée pour ce fichier")
                 else:
-                    _write(path, old)
+                    _write(path, old, tags)
             except (OSError, ValueError, mutagen.MutagenError) as exc:
                 result.failed.append((path_text, str(exc)))
             else:

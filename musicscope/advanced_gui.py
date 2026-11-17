@@ -769,8 +769,19 @@ class AdvancedWindow(MainWindow):
         if not edits:
             self.state.setText("Aucune différence avec les tags actuels : rien à écrire.")
             return
+        from .tagwriter import linked_paths
+        linked = set(linked_paths(edits))
+        if linked:
+            edits = [edit for edit in edits if edit.path not in linked]
+            if not edits:
+                self.show_error(f"Écriture refusée : les {len(linked)} fichier(s) concernés sont liés physiquement "
+                                "(qBittorrent, Lidarr). Modifier leurs tags modifierait aussi la copie partagée.")
+                return
         if confirm is None:
-            if TagPreviewDialog(edits, self).exec() != QDialog.DialogCode.Accepted:
+            preview = TagPreviewDialog(edits, self, linked=len(linked))
+            accepted = preview.exec() == QDialog.DialogCode.Accepted
+            preview.deleteLater()
+            if not accepted:
                 return
         elif not confirm:
             return
@@ -832,7 +843,7 @@ class AdvancedWindow(MainWindow):
         with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
             entries = journal.entries(batch_id)
         states = {"written": "écrit", "pending": "interrompu", "failed": "échec",
-                  "failed_restored": "échec, valeurs d’origine rétablies", "undone": "annulé"}
+                  "failed_restored": "échec, fichier d’origine intact", "undone": "annulé"}
         lines = [f"<h2>Modification n° {batch_id}</h2><table border='1' cellspacing='0' cellpadding='4'>"
                  "<tr><th>Fichier</th><th>État</th><th>Champ</th><th>Avant</th><th>Après</th></tr>"]
         for path, old, new, status in entries:

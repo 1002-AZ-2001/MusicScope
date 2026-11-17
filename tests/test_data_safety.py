@@ -347,13 +347,13 @@ def test_cancelled_tag_write_refreshes_journal_and_inventory(demo, monkeypatch):
         return original(self, edits, album_path, cancel=cancel, progress=stop_after_first)
 
     monkeypatch.setattr(tagwriter.TagJournal, "apply", apply)
-    row = next(index for index, album in enumerate(window.inventory.albums) if album.path.endswith("Horizons FLAC"))
+    row = next(index for index, album in enumerate(window.inventory.albums) if album.path.endswith("Horizons MP3"))
     window.album_table.selectRow(window.album_proxy.mapFromSource(window.album_model.index(row, 0)).row())
     app.processEvents()
     window.edit_tags(dialog_values=({"album": "Nouveau titre"}, {}), confirm=True)
     settle(window, app)
     assert window.tag_batch_model.rowCount() == 1
-    album = next(album for album in window.inventory.albums if album.path.endswith("Horizons FLAC"))
+    album = next(album for album in window.inventory.albums if album.path.endswith("Horizons MP3"))
     on_disk = [read_track(Path(track.path)).tags.get("album") for track in album.ordered_tracks]
     assert on_disk == [track.tags.get("album") for track in album.ordered_tracks]  # inventaire actualisé
     assert ["Nouveau titre"] in on_disk and ["Horizons"] in on_disk
