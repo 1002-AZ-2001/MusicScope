@@ -7,6 +7,7 @@ import json
 import os
 import random
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,7 @@ def test_same_size_rewrite_with_restored_mtime_is_reread(tmp_path):
     with Cache(tmp_path / "cache.sqlite3") as cache:
         assert scan(root, cache, workers=1).albums[0].tracks[0].tags["title"] == ["Ancien titre"]
         before = path.stat()
+        time.sleep(0.05)  # ctime avance par pas d'horloge (quelques ms) : réécriture vraiment postérieure
         tags = FLAC(path)
         tags["title"] = ["Nouveau titre"]  # même longueur : la marge garde la taille identique
         tags.save()
@@ -257,9 +259,9 @@ def test_organizer_hashes_each_file_once_per_move_and_restore(tmp_path, monkeypa
     plan = org.plan_album(Album(str(source), tracks), tmp_path / "lib")
     assert len(hashes) == 2
     journal = org.apply_plan(plan, tmp_path / "journals", confirmed=True)
-    assert len(hashes) == 2  # avant : 4 de plus
+    assert len(hashes) == 4  # un contrôle du contenu à l'application ; avant : 4 de plus
     org.restore_journal(journal, confirmed=True)
-    assert len(hashes) == 4  # une lecture de contrôle, avant : 4
+    assert len(hashes) == 6  # une lecture de contrôle à la restauration ; avant : 4
 
 
 def test_generic_album_names_do_not_explode_into_pairs():

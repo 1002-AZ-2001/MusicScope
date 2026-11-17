@@ -484,13 +484,14 @@ def apply_plan(plan: MovePlan, journal_dir: str | Path, confirmed: bool = False,
         raise OrganizeError("Déplacement entre volumes refusé.")
     if _collision(destination):
         raise OrganizeError("Destination déjà présente : aucun remplacement autorisé.")
-    # Le contenu a été haché à la prévisualisation : taille, date et identité inchangées suffisent.
+    # Contenu re-haché une fois : taille, date et même ctime ne suffisent pas, car l'horloge des
+    # dates de fichiers avance par pas de quelques millisecondes (une réécriture à taille égale
+    # juste après la prévisualisation peut garder le même ctime).
     if not plan.fingerprint or _fingerprint(plan.files) != plan.fingerprint:
         raise OrganizeError("Plan invalide : générer un nouveau plan.")
-    current = _snapshot(source, hashed=False)
-    if _metadata(current) != _metadata(plan.files):
+    current = _snapshot(source)
+    if _fingerprint(current) != plan.fingerprint:
         raise OrganizeError("Le dossier a changé depuis la prévisualisation : générer un nouveau plan.")
-    current = plan.files
     hardlinked = sum(entry.kind == "file" and entry.nlink > 1 for entry in current)
     if hardlinked and not allow_hardlinks:
         raise OrganizeError("Des liens physiques sont présents : accord distinct obligatoire.")
@@ -504,8 +505,8 @@ def apply_plan(plan: MovePlan, journal_dir: str | Path, confirmed: bool = False,
     _save_journal(journal, record)
     try:
         _mkdir_safe(destination.parent)
-        # Revalidation après la préparation des dossiers/journal.
-        if _metadata(_snapshot(source, hashed=False)) != _metadata(plan.files):
+        # Revalidation rapide après la préparation des dossiers et du journal (instants plus tard).
+        if _metadata(_snapshot(source, hashed=False)) != _metadata(current):
             raise OrganizeError("Le dossier a changé avant le renommage.")
         _rename_without_replace(source, destination, (plan.source_device, plan.source_inode))
         record["state"] = "applied"

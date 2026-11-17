@@ -1,4 +1,8 @@
-# Validation — MusicScope 0.14.0
+# Validation — MusicScope 0.14.1
+
+## Version 0.14.1 — contrôle du contenu au rangement
+
+La v0.14.0 n'a pas été publiée : sur `main`, le test `test_stale_tree_refused_before_journal_or_source_mutation[content]` a échoué. Depuis la v0.12.0, l'application d'un rangement ne revérifiait que taille, date et ctime ; or l'horloge des dates de fichiers avance par pas de quelques millisecondes, et une réécriture à taille égale juste après la prévisualisation pouvait garder le même ctime. Le contenu est de nouveau haché une fois à l'application (au lieu de quatre avant la v0.12.0) ; le relevé rapide ne sert plus qu'à la revérification juste avant le renommage. Test répété 8 fois sans échec. Le test du cache ctime attend 50 ms avant la réécriture pour la même raison.
 
 ## Version 0.14.0 — authenticité des FLAC
 
