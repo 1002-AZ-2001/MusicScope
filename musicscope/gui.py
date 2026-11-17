@@ -903,6 +903,8 @@ class MainWindow(QMainWindow):
         for col in (0, 1, 4, 5):
             self.album_table.setColumnWidth(col, min(self.album_table.columnWidth(col), 250))
         self.log_details.setPlainText("\n".join(inventory.errors) or "Aucun fichier illisible signalé.")
+        for line in getattr(self, "service_log", [])[-20:]:  # services prévenus : gardés après l'actualisation
+            self.log_details.append(line)
         self.set_page_count(0, len(inventory.albums))
         self.set_page_count(1, len(self.matches))
         self.set_page_count(2, None)
