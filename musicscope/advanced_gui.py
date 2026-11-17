@@ -190,6 +190,7 @@ class AdvancedWindow(MainWindow):
         self.artworks = []
         self.extension_actions = []
         self.seed_index = None  # fichiers de qBittorrent, lus pour la session (lecture seule)
+        self.spectra = {}  # verdicts d'authenticité des sans-perte (chemin de piste → résultat)
         self._qbittorrent_config = None
         super().__init__(cache_dir)
         self.setWindowTitle("MusicScope — Inventaire et revue de votre médiathèque")
@@ -354,6 +355,7 @@ class AdvancedWindow(MainWindow):
         self._action(review, "Actualiser les décisions enregistrées", self.refresh_decisions)
         self._action(review, "Afficher les constats prioritaires", lambda: self.tabs.setCurrentIndex(self.quality_index))
         self._action(review, "Estimer l’espace des copies exactes", self.estimate_storage)
+        self._action(review, "Vérifier l’authenticité des FLAC (spectre)…", self.check_spectrum)
         review.addSeparator()
         self._action(review, "Albums en double…", lambda: self.tabs.setCurrentIndex(self.duplicates_index))
         self._action(review, "Mettre en quarantaine les copies en trop sélectionnées…", self.quarantine_duplicates)
@@ -406,11 +408,77 @@ class AdvancedWindow(MainWindow):
 
     def prepare_in_worker(self, inventory, pairs, progress=None) -> dict:
         from .duplicates import duplicate_groups
+        from .spectrum import SpectrumCache
         prepared = super().prepare_in_worker(inventory, pairs, progress)
+        try:
+            with SpectrumCache(self.cache_dir / "spectrum.sqlite3") as cache:
+                spectra = cache.known(inventory)  # analyses déjà faites, fichiers inchangés
+        except Exception:
+            spectra = {}
         if progress:
             progress(0, 0, "Recherche des albums en double…")
-        prepared.update(pairs=pairs, duplicate_groups=duplicate_groups(pairs))
+        prepared.update(pairs=pairs, spectra=spectra, duplicate_groups=duplicate_groups(pairs, spectra))
         return prepared
+
+    def spectrum_findings(self):
+        from .review import QualityFinding
+        from .spectrum import SUSPECT, album_verdict
+        findings = []
+        for album in self.inventory.albums:
+            verdict = album_verdict(album, self.spectra)
+            if verdict is not None and verdict.doubtful:
+                analysed = sum(track.path in self.spectra for track in album.tracks)
+                findings.append(QualityFinding(1 if verdict.verdict == SUSPECT else 3, "Spectre", album.path,
+                                               f"{verdict.verdict} — {verdict.reason} ({analysed} piste(s) analysée(s))"))
+        return findings
+
+    def check_spectrum(self, scope=None):
+        """Analyse en tâche de fond ; une piste par album suffit en général (un faux FLAC l'est pour
+        tout l'album), toutes les pistes sur demande. Résultats gardés en cache."""
+        if not self._fresh() or self.task is not None:
+            return
+        choices = ["Albums sélectionnés (toutes les pistes)", "Toute la bibliothèque, une piste par album (rapide)",
+                   "Toute la bibliothèque, toutes les pistes (long)"]
+        if scope is None:
+            label, accepted = QInputDialog.getItem(self, "Authenticité des FLAC",
+                "FFmpeg mesure les aigus de 30 s par piste (≈ 0,3 s en local, plus sur un NAS).\n"
+                "Une coupure nette (≈ 16-20 kHz) révèle souvent un FLAC fabriqué à partir d'un MP3.", choices, 0, False)
+            if not accepted or label not in choices:
+                return
+            scope = choices.index(label)
+        if scope == 0:
+            albums = self._selected()
+            if not albums:
+                self.state.setText("Sélectionnez un ou plusieurs albums dans l’inventaire.")
+                return
+            per_album = None
+        else:
+            albums, per_album = list(self.inventory.albums), (1 if scope == 1 else None)
+        from .spectrum import SpectrumCache, SpectrumUnavailable, analyze
+
+        def operation(cancel, progress):
+            try:
+                with SpectrumCache(self.cache_dir / "spectrum.sqlite3") as cache:
+                    return analyze(albums, cache, per_album, cancel, progress)
+            except SpectrumUnavailable as exc:
+                return exc
+
+        def done(results):
+            if isinstance(results, Exception):
+                self.show_error(str(results))
+                return
+            from .spectrum import REVIEW, SUSPECT
+            self.spectra.update(results)
+            suspect = sum(result.verdict == SUSPECT for result in results.values())
+            review = sum(result.verdict == REVIEW for result in results.values())
+            self.refresh_duplicates()
+            self._guard_store(self.refresh_reviews, "review.sqlite3")
+            self.state.setText(f"Spectre : {len(results)} piste(s) analysée(s), {suspect} suspecte(s), {review} à "
+                               "vérifier. Détail dans la page Qualité (catégorie « Spectre »).")
+            if suspect or review:
+                self.tabs.setCurrentIndex(self.quality_index)
+
+        self.run_task("Analyse du spectre des FLAC…", operation, done)
 
     def connect_qbittorrent(self, config=None, client_factory=None):
         from .qbittorrent_gui import connect_qbittorrent
@@ -460,6 +528,8 @@ class AdvancedWindow(MainWindow):
 
     def display_inventory(self, inventory, pairs=None):
         super().display_inventory(inventory, pairs)
+        prepared = getattr(self, "prepared", {}) or {}
+        self.spectra = prepared.get("spectra", {}) if prepared.get("pairs") is self.matches else {}
         self.historical = False
         self.requires_rescan = False
         self.pending_plan = None
@@ -479,7 +549,7 @@ class AdvancedWindow(MainWindow):
     def refresh_reviews(self):
         from .review import ReviewStore, quality_findings
         self.quality_model.removeRows(0, self.quality_model.rowCount())
-        findings = quality_findings(self.inventory)
+        findings = quality_findings(self.inventory) + self.spectrum_findings()
         for finding in findings:
             append_row(self.quality_model, [finding.priority, finding.category, finding.album_path, finding.message])
         self.set_page_count(self.quality_index, len(findings))
@@ -987,7 +1057,7 @@ class AdvancedWindow(MainWindow):
             # Calculés dans le worker (lecture des liens physiques sur le disque).
             self.duplicate_groups = prepared.pop("duplicate_groups")
         else:
-            self.duplicate_groups = duplicate_groups(self.matches)
+            self.duplicate_groups = duplicate_groups(self.matches, self.spectra)
         colors = {"Copie exacte": STATUS_COLORS[IDENTICAL], "Même album probable": STATUS_COLORS[MATCHING],
                   "À vérifier": "#9fb3c1"}
         self.duplicate_model.removeRows(0, self.duplicate_model.rowCount())
