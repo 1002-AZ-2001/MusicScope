@@ -162,6 +162,7 @@ class FileDuplicatesPage(QWidget):
             return
         root = window.root
         tracks = {track.path: track for album in window.inventory.albums for track in album.tracks}
+        seeds = getattr(window, "seed_index", None)
 
         def operation(cancel, progress):
             from .cache import Cache
@@ -175,6 +176,11 @@ class FileDuplicatesPage(QWidget):
                 records = fd.collect_files(root, options, tracks, cancel, progress)
                 with Cache(window.cache_dir / "inventory.sqlite3") as cache:
                     groups = fd.find_duplicates(records, options, cache, printer, cancel, progress)
+                if seeds is not None:
+                    for group in groups:
+                        for record in group.files:
+                            item = seeds.protected(record.path, record.size)
+                            record.seeded = item.torrent if item is not None else ""
                 if owned is not None and not options.exclude_folders and not options.include_extensions \
                         and not options.exclude_extensions and options.max_size is None:
                     # Parcours complet de la racine : les empreintes des fichiers disparus sont inutiles.
@@ -219,13 +225,17 @@ class FileDuplicatesPage(QWidget):
                     record.name, folder or ".", byte_size(record.size),
                     datetime.fromtimestamp(record.mtime_ns / 1e9).strftime("%d/%m/%Y %H:%M"), record.codec,
                     f"{record.bitrate} kb/s" if record.bitrate else "", f"{record.duration:.1f} s" if record.duration else "",
-                    str(record.nlink) + (f" (+{len(record.aliases)} ici)" if record.aliases else "")])
+                    str(record.nlink) + (f" (+{len(record.aliases)} ici)" if record.aliases else "")
+                    + (" • seed" if record.seeded else "")])
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(0, Qt.CheckState.Unchecked)
                 item.setData(0, Qt.ItemDataRole.UserRole, record.path)
                 item.setToolTip(0, record.path)
                 item.setToolTip(1, record.folder)
-                if record.linked:
+                if record.seeded:
+                    item.setToolTip(7, f"Fichier du torrent « {record.seeded} » dans qBittorrent : jamais coché, "
+                                       "jamais déplacé.")
+                if record.linked or record.seeded:
                     for column in range(len(COLUMNS)):
                         item.setForeground(column, QColor("#ffd27f"))
                     item.setToolTip(7, LINKED_TIP + ("\nAutres chemins sous la racine : " + ", ".join(record.aliases)
@@ -319,6 +329,11 @@ class FileDuplicatesPage(QWidget):
             window.show_error(f"Refusé : {len(full)} groupe(s) ont toutes leurs copies cochées. Gardez au moins un "
                               "fichier par groupe (menu Sélection → Garder le meilleur).")
             return
+        seeded = [self.records[path] for path in sorted(selected) if self.records[path].seeded]
+        if seeded:
+            window.show_error(f"Refusé : {len(seeded)} fichier(s) coché(s) appartiennent à un torrent qBittorrent "
+                              f"(« {seeded[0].seeded} »…). Décochez-les ou supprimez d’abord le torrent.")
+            return
         records = [self.records[path] for path in sorted(selected)]
         size = sum(record.size for record in records if not record.linked)
         linked = [record for record in records if record.linked]
@@ -362,6 +377,12 @@ class FileDuplicatesPage(QWidget):
         def operation(cancel, progress):
             # La liste peut dater d'avant une quarantaine d'albums ou un rangement : chaque groupe
             # doit encore garder, hors sélection, au moins une copie inchangée sur le disque.
+            seeds = getattr(window, "seed_index", None)
+            if seeds is not None:  # torrents relus depuis la recherche : contrôle au dernier moment
+                late = [record.path for record in records if seeds.protected(record.path, record.size) is not None]
+                if late:
+                    raise fd.StaleSelection(f"Refusé : {len(late)} fichier(s) appartiennent désormais à un torrent "
+                                            "qBittorrent. Relancez la recherche.")
             orphaned = fd.groups_without_kept_copy(groups, set(selected))
             if orphaned:
                 names = ", ".join(sorted({Path(record.path).name for group in orphaned[:3] for record in group.files}))

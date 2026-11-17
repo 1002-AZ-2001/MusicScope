@@ -189,6 +189,8 @@ class AdvancedWindow(MainWindow):
         self.current_decisions = []
         self.artworks = []
         self.extension_actions = []
+        self.seed_index = None  # fichiers de qBittorrent, lus pour la session (lecture seule)
+        self._qbittorrent_config = None
         super().__init__(cache_dir)
         self.setWindowTitle("MusicScope — Inventaire et revue de votre médiathèque")
         self._build_extended_tabs()
@@ -342,6 +344,7 @@ class AdvancedWindow(MainWindow):
     def _build_menus(self):
         sources = self.add_menu("Services")
         self._action(sources, "Diagnostic Jellyfin : configurer et comparer le catalogue…", self.start_jellyfin)
+        self._action(sources, "qBittorrent : lire les torrents et protéger leurs fichiers…", self.connect_qbittorrent)
         sources.addSeparator()
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
@@ -408,6 +411,25 @@ class AdvancedWindow(MainWindow):
             progress(0, 0, "Recherche des albums en double…")
         prepared.update(pairs=pairs, duplicate_groups=duplicate_groups(pairs))
         return prepared
+
+    def connect_qbittorrent(self, config=None, client_factory=None):
+        from .qbittorrent_gui import connect_qbittorrent
+        connect_qbittorrent(self, config, client_factory)
+
+    def torrent_blockers(self, paths_and_sizes) -> list[str]:
+        """Raisons de refus pour des fichiers qui appartiennent à un torrent (à appeler dans le worker)."""
+        index = self.seed_index
+        if index is None:
+            return []
+        protected = [(path, item) for path, size in paths_and_sizes
+                     if (item := index.protected(path, size)) is not None]
+        if not protected:
+            return []
+        active = sum(item.active for _, item in protected)
+        names = ", ".join(sorted({item.torrent for _, item in protected})[:3])
+        return [f"{len(protected)} fichier(s) appartiennent à un torrent qBittorrent ({names}…), dont {active} en "
+                "partage actif : déplacement refusé. Supprimez d’abord le torrent dans qBittorrent si vous "
+                "voulez vraiment retirer ces fichiers."]
 
     def _mark_summary_stale(self):
         text = self.summary.text()
@@ -816,6 +838,8 @@ class AdvancedWindow(MainWindow):
             return
         from .tagwriter import linked_paths
         linked = set(linked_paths(edits))
+        if self.seed_index is not None:  # fichier d'un torrent sans lien physique (dossier de téléchargement)
+            linked |= {edit.path for edit in edits if self.seed_index.protected(edit.path, edit.size)}
         if linked:
             edits = [edit for edit in edits if edit.path not in linked]
             if not edits:
@@ -1061,7 +1085,9 @@ class AdvancedWindow(MainWindow):
         def operation(cancel, progress):
             plans = []
             for position, album in enumerate(albums, 1):
-                plans.append(plan_quarantine(album, root, cancel=cancel))
+                plan = plan_quarantine(album, root, cancel=cancel)
+                plan.blockers.extend(self.torrent_blockers((track.path, track.size) for track in album.tracks))
+                plans.append(plan)
                 progress(position, len(albums), album.path)
             return plans
         self.run_task("Vérification des copies à mettre en quarantaine…", operation,
@@ -1149,8 +1175,11 @@ class AdvancedWindow(MainWindow):
                 "<p>Menu Rangement → Appliquer pour demander la confirmation. Aucun tag ne sera écrit.</p>"]
             self.organizer_details.setHtml("".join(text))
             self.tabs.setCurrentIndex(self.organizer_index)
-        self.run_task("Vérification du plan de rangement et des liens physiques…",
-                      lambda cancel, progress: plan_album(selected[0], Path(destination_root), cancel=cancel), done)
+        def operation(cancel, progress):
+            plan = plan_album(selected[0], Path(destination_root), cancel=cancel)
+            plan.blockers.extend(self.torrent_blockers((track.path, track.size) for track in selected[0].tracks))
+            return plan
+        self.run_task("Vérification du plan de rangement et des liens physiques…", operation, done)
 
     def apply_organization(self):
         if not self._fresh() or self.task is not None or self.pending_plan is None:
