@@ -376,6 +376,8 @@ class FileDuplicatesPage(QWidget):
                 window.state.setText(message)
             if moved:
                 window.requires_rescan = True
+                if hasattr(window, "notify_changed"):
+                    window.notify_changed({os.path.dirname(path) for path in moved})
 
         groups = self.groups
 
@@ -418,6 +420,8 @@ class FileDuplicatesPage(QWidget):
         def done(result):
             restored, failed = result
             self.invalidate("Des fichiers ont été restaurés : relancez la recherche.")
+            if restored and hasattr(window, "notify_changed"):
+                window.notify_changed({os.path.dirname(path) for path in restored})
             message = f"{len(restored)} fichier(s) restauré(s). Relancez la recherche pour actualiser la liste."
             if failed:
                 window.show_error(message + " — Échecs : " + " | ".join(f"{Path(p).name} : {e}" for p, e in failed))

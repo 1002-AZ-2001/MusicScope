@@ -234,6 +234,22 @@ class JellyfinClient:
                 raise JellyfinUnavailable("Réponse Jellyfin illisible : l'adresse désigne-t-elle bien Jellyfin ?") from exc
         raise JellyfinUnavailable("Connexion Jellyfin impossible.")
 
+    def report_updated(self, server_paths: list[str]) -> None:
+        """Signale à Jellyfin des dossiers modifiés (POST Library/Media/Updated) : il les relit sans
+        rescanner toute la bibliothèque. Seule une clé ordinaire est nécessaire."""
+        if not server_paths:
+            return
+        body = json.dumps({"Updates": [{"Path": path, "UpdateType": "Modified"} for path in server_paths]}).encode()
+        headers = {**self._headers(), "Content-Type": "application/json"}
+        request = Request(urljoin(self.server_url, "Library/Media/Updated"), data=body, headers=headers, method="POST")
+        try:
+            with self.opener(request, timeout=self.timeout) as response:
+                response.read(1024)
+        except HTTPError as exc:
+            raise JellyfinUnavailable(HTTP_HINTS.get(exc.code, f"Jellyfin indisponible (HTTP {exc.code}).")) from exc
+        except (URLError, OSError, TimeoutError, HTTPException) as exc:
+            raise JellyfinUnavailable("Connexion Jellyfin impossible : vérifiez l'adresse, le port et le réseau.") from exc
+
     def server_info(self) -> ServerInfo:
         """Nom et version, sans clé ; puis un appel authentifié pour valider la clé."""
         info = self._get("System/Info/Public", authenticated=False, max_bytes=1024 * 1024)

@@ -346,6 +346,7 @@ class AdvancedWindow(MainWindow):
         sources = self.add_menu("Services")
         self._action(sources, "Diagnostic Jellyfin : configurer et comparer le catalogue…", self.start_jellyfin)
         self._action(sources, "qBittorrent : lire les torrents et protéger leurs fichiers…", self.connect_qbittorrent)
+        self._action(sources, "Lidarr : relire les dossiers modifiés (et prévenir Jellyfin)…", self.configure_lidarr)
         sources.addSeparator()
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
@@ -479,6 +480,15 @@ class AdvancedWindow(MainWindow):
                 self.tabs.setCurrentIndex(self.quality_index)
 
         self.run_task("Analyse du spectre des FLAC…", operation, done)
+
+    def configure_lidarr(self, config=None):
+        from .services_gui import configure_lidarr
+        configure_lidarr(self, config)
+
+    def notify_changed(self, folders):
+        """Après une modification sur le disque : Lidarr relit, Jellyfin est prévenu (si configurés)."""
+        from .services_gui import notify_changed
+        return notify_changed(self, folders)
 
     def connect_qbittorrent(self, config=None, client_factory=None):
         from .qbittorrent_gui import connect_qbittorrent
@@ -965,6 +975,7 @@ class AdvancedWindow(MainWindow):
             # Seuls les fichiers modifiés sont relus : l'actualisation est rapide.
             self.requires_rescan = True
             self._after_task = self.start_scan
+            self.notify_changed({str(Path(path).parent) for path in result.written})
 
     def refresh_tag_journal(self, select=None):
         from .tagwriter import TagJournal
@@ -1233,6 +1244,8 @@ class AdvancedWindow(MainWindow):
             if done:
                 self.requires_rescan = True
                 self._after_task = self.start_scan
+                failed_sources = {path for path, _ in failed}
+                self.notify_changed({str(Path(plan.source).parent) for plan in ready if plan.source not in failed_sources})
         # Appelé depuis le résultat de la vérification : la tâche suivante démarre après sa fin.
         start = lambda: self.run_task("Mise en quarantaine des copies en trop…", operation, finished, cancellable=False)
         if self.task is not None:
@@ -1297,6 +1310,7 @@ class AdvancedWindow(MainWindow):
             self.organizer_details.append(f"<h3>Déplacement terminé</h3><p>Journal : {escaped(journal)}</p>"
                 "<p>Relancez l’analyse pour actualiser les chemins. Le menu Rangement permet de restaurer ce journal.</p>")
             self.state.setText(f"Déplacement terminé. Journal : {journal}. Relancez l’analyse.")
+            self.notify_changed({str(Path(plan.source).parent), str(Path(plan.destination).parent)})
         self.run_task("Application du déplacement confirmé…",
             lambda cancel, progress: apply_plan(plan, self.cache_dir / "journals", confirmed=True, allow_hardlinks=allow_hardlinks),
             done, cancellable=False)
@@ -1335,6 +1349,7 @@ class AdvancedWindow(MainWindow):
             self.organizer_details.append(f"<h3>Restauration terminée</h3><p>{escaped(journal)}</p><p>Relancez l’analyse.</p>")
             self.tabs.setCurrentIndex(self.organizer_index)
             self.state.setText("Restauration terminée. Relancez l’analyse pour actualiser l’inventaire.")
+            self.notify_changed({str(Path(source).parent), str(Path(destination).parent)})
         self.run_task("Restauration du déplacement journalisé…",
             lambda cancel, progress: restore_journal(Path(journal_path), confirmed=True), done, cancellable=False)
 

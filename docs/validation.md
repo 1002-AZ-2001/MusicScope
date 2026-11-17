@@ -1,4 +1,8 @@
-# Validation — MusicScope 0.15.0
+# Validation — MusicScope 0.16.0
+
+## Version 0.16.0 — Lidarr et Jellyfin prévenus
+
+Sources lues dans le code des projets : Lidarr (branche develop) — en-tête `X-Api-Key` (`Lidarr.Http/Authentication/AuthenticationBuilderExtensions.cs`), commande `RescanFolders` (`RescanFoldersCommand.cs` : `Folders`, `Filter`, `AddNewArtists`, `ArtistIds`), nom de commande sans le suffixe « Command » (`Command.cs`), version dans `system/status` (`SystemController.cs`) ; Jellyfin (master) — `POST Library/Media/Updated` avec `[Authorize]` et `MediaUpdateInfoDto` (`Updates` → `Path`, `UpdateType` « Created, Modified, Deleted »), alors que `POST Library/Refresh` exige l'élévation. Tests (`tests/test_services_notify.py`) : requêtes exactes (méthode, chemin, en-tête, corps, `addNewArtists` faux, clé jamais dans l'URL), erreurs expliquées, correspondances de chemins (limites de dossier, préfixe Windows, sans correspondance), service en échec sans effet sur l'autre, notification depuis la fenêtre après une écriture de tags avec chemins traduits, clés absentes des préférences, désactivation. **531 tests** passent sous Python 3.12 et 3.13. Non essayé : vos serveurs Lidarr et Jellyfin réels.
 
 ## Version 0.15.0 — éditeur de tags enrichi
 
