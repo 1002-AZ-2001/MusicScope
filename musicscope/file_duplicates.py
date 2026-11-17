@@ -74,6 +74,7 @@ class FileRecord:
     track: Track | None = None
     nlink: int = 1
     aliases: list[str] = field(default_factory=list)
+    seeded: str = ""  # torrent qBittorrent qui utilise ce fichier : jamais coché ni déplacé
 
     @property
     def linked(self) -> bool:
@@ -379,7 +380,8 @@ def select_all_but_best(groups: list[FileGroup]) -> set[str]:
     chosen = set()
     for group in groups:
         best = group.best()
-        chosen |= {record.path for record in group.files if record is not best and not record.linked}
+        chosen |= {record.path for record in group.files if record is not best and not record.linked
+                   and not record.seeded}
     return chosen
 
 
@@ -388,7 +390,8 @@ def select_lossy_when_lossless(groups: list[FileGroup]) -> set[str]:
     for group in groups:
         if any(record.codec in LOSSLESS for record in group.files):
             chosen |= {record.path for record in group.files
-                       if record.track is not None and record.codec not in LOSSLESS and not record.linked}
+                       if record.track is not None and record.codec not in LOSSLESS and not record.linked
+                       and not record.seeded}
     return chosen
 
 
@@ -396,7 +399,8 @@ def select_keep_by_date(groups: list[FileGroup], newest: bool) -> set[str]:
     chosen = set()
     for group in groups:
         keep = (max if newest else min)(group.files, key=lambda record: (record.mtime_ns, record.path))
-        chosen |= {record.path for record in group.files if record is not keep and not record.linked}
+        chosen |= {record.path for record in group.files if record is not keep and not record.linked
+                   and not record.seeded}
     return chosen
 
 

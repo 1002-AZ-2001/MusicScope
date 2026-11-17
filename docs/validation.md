@@ -1,4 +1,10 @@
-# Validation — MusicScope 0.12.0
+# Validation — MusicScope 0.13.0
+
+## Version 0.13.0 — qBittorrent
+
+Lecture seule de la Web API v2 (wiki « WebUI API (qBittorrent 5.0) », page « API Key Authentication (≥v5.2.0) » et `WebAPI_Changelog.md`). Tests (`tests/test_qbittorrent.py`, faux serveur conforme à ces documents) : connexion par cookie `SID` avec `Referer`/`Origin` identiques à l'hôte, clé API `Authorization: Bearer` sans connexion, 401 sur identifiants refusés sans nouvelle tentative, pagination `limit`/`offset`, `includeFiles` puis repli sur `torrents/files` (WebAPI < 2.11.8), correspondance de chemin d'un conteneur, seules des requêtes de lecture (GET) après la connexion ; fichier protégé par chemin et par inode (lien Lidarr), copie indépendante non protégée, torrent en pause protégé ; préférences sans mot de passe ni clé ; rangement et quarantaine d'album bloqués, éditeur de tags sans effet, fichiers jamais cochés ni mis en quarantaine dans « Fichiers en double ».
+
+**490 tests** passent sous Python 3.12 et 3.13. Non essayé : votre qBittorrent réel. Non documenté par qBittorrent : la présence du dossier racine dans `name` de `torrents/files` ; les deux formes sont essayées (`save_path`/`name`, puis `content_path`/`name`).
 
 ## Version 0.12.0 — performance
 
