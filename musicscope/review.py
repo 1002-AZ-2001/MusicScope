@@ -11,7 +11,7 @@ from pathlib import Path
 import sqlite3
 import stat
 
-from .audit import audit_album
+from .audit import album_issues
 from .identity import MountCache, file_identity
 from .models import Album, Inventory, Track
 
@@ -138,12 +138,12 @@ class QualityFinding:
 def quality_findings(inventory: Inventory) -> list[QualityFinding]:
     result = []
     seen = set()
-    album_issues = {issue for album in inventory.albums for issue in album.issues}
+    known_issues = {issue for album in inventory.albums for issue in album.issues}
     for error in inventory.errors:
-        if error not in album_issues:
+        if error not in known_issues:
             result.append(QualityFinding(0, "Lecture", inventory.root, error))
     for album in inventory.albums:
-        issues = list(dict.fromkeys(album.issues + audit_album(album)))
+        issues = album_issues(album)
         for issue in issues:
             text = issue.casefold()
             if "illisible" in text or "lecture impossible" in text:

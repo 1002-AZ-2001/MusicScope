@@ -214,6 +214,7 @@ def test_sequential_progress_is_reported_during_tag_reading(tmp_path, monkeypatc
         return reader(path, stat)
 
     monkeypatch.setattr("musicscope.scanner.read_track", tracing_reader)
+    monkeypatch.setattr("musicscope.scanner._throttled", lambda progress: progress)  # sans limite de fréquence
     with Cache(tmp_path / "cache" / "inventory.sqlite3") as cache:
         scan(tmp_path / "library", cache, workers=1,
              progress=lambda done, total, label: events.append(("progress", done, total)))
@@ -221,3 +222,15 @@ def test_sequential_progress_is_reported_during_tag_reading(tmp_path, monkeypatc
     # Une progression suit chaque lecture, avant la lecture suivante.
     for current, following in zip(reads, reads[1:]):
         assert any(event[0] == "progress" for event in events[current + 1:following])
+
+
+def test_progress_is_throttled_but_reaches_the_end(tmp_path, monkeypatch):
+    library(tmp_path / "library", albums=4, tracks=25)
+    monkeypatch.setattr("musicscope.scanner.read_track", reader)
+    events = []
+    with Cache(tmp_path / "cache" / "inventory.sqlite3") as cache:
+        scan(tmp_path / "library", cache, workers=1, progress=lambda *event: events.append(event))
+    # Une notification par fichier inondait la file Qt : au plus une toutes les 100 ms,
+    # plus la dernière de chaque phase.
+    assert len(events) < 20
+    assert (100, 100) in {(done, total) for done, total, _ in events}

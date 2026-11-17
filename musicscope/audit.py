@@ -5,6 +5,20 @@ from .models import Album
 from .normalization import name_key
 
 
+def album_issues(album: Album) -> list[str]:
+    """Constats de l'inventaire et de l'audit, sans doublon, calculés une fois par album.
+
+    Le résultat est mémorisé sur l'objet tant que ses pistes et constats ne changent pas :
+    l'affichage, les constats de qualité et le choix de la copie à garder le réutilisent."""
+    key = (len(album.tracks), album.complete, len(album.issues))
+    cached = album.__dict__.get("_issues_cache")
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    value = list(dict.fromkeys(album.issues + audit_album(album)))
+    album.__dict__["_issues_cache"] = (key, value)
+    return value
+
+
 def audit_album(album: Album) -> list[str]:
     issues = []
     if not album.complete:

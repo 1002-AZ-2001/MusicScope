@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 
-from .audit import audit_album
+from .audit import album_issues
 from .comparison import DISTINCT, IDENTICAL, MATCHING, PHYSICAL, PROBABLE, REVIEW, Comparison, _known_missing
 from .folder_names import parse_folder
 from .models import Album
@@ -81,8 +81,10 @@ def physical_files(album: Album) -> list[tuple[int, int, int]]:
     return [(device, inode, links) for device, inode, links, _ in _physical_by_track(album)]
 
 
-def score_album(album: Album) -> CopyScore:
-    """Plus le tuple est grand, meilleure est la copie. Les raisons sont lisibles."""
+def score_album(album: Album, physical: list[tuple[int, int, int, int]] | None = None) -> CopyScore:
+    """Plus le tuple est grand, meilleure est la copie. Les raisons sont lisibles.
+
+    `physical` évite de relire l'identité des pistes déjà lue par l'appelant."""
     result = CopyScore(album, ())
     complete = album.complete and bool(album.tracks) and not _known_missing(album)
     (result.strengths if complete else result.weaknesses).append(
@@ -100,11 +102,11 @@ def score_album(album: Album) -> CopyScore:
     has_mbid = bool(album.values("musicbrainz_albumid"))
     if has_mbid:
         result.strengths.append("identifiant MusicBrainz présent")
-    issues = len(set(album.issues + audit_album(album)))
+    issues = len(album_issues(album))
     if issues:
         result.weaknesses.append(f"{issues} constat(s) d’audit")
     size = sum(track.size for track in album.tracks)
-    physical = _physical_by_track(album)
+    physical = _physical_by_track(album) if physical is None else physical
     linked = sum(links > 1 for _, _, links, _ in physical)
     result.linked_bytes = sum(size for _, _, links, size in physical if links > 1)
     if linked:
@@ -167,7 +169,8 @@ def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[Dupli
         mixed_editions = any(pair <= inside for pair in distinct)
         if mixed_editions:
             confidence = UNSURE
-        scores = [score_album(album) for album in group_albums]
+        physical = [_physical_by_track(album) for album in group_albums]  # un stat par piste
+        scores = [score_album(album, files) for album, files in zip(group_albums, physical)]
         ranked = sorted(range(len(scores)), key=lambda index: scores[index].score, reverse=True)
         best, second = ranked[0], ranked[1]
         keep = best if scores[best].score[:-1] != scores[second].score[:-1] else None
@@ -186,7 +189,7 @@ def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[Dupli
         years = {parse_folder(album.path).year for album in group_albums} - {""}
         if len(years) > 1:
             reasons.append("Années différentes dans les noms de dossiers : vérifier qu'il ne s'agit pas d'une réédition.")
-        identities = [{(device, inode) for device, inode, _ in physical_files(album)} for album in group_albums]
+        identities = [{(device, inode) for device, inode, _, _ in files} for files in physical]
         shared = any(ids & other for position, ids in enumerate(identities) for other in identities[position + 1:])
         if shared:
             keep = None

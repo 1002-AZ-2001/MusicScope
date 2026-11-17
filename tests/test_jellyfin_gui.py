@@ -108,7 +108,7 @@ def test_problem_filter_counts_and_summary(window, app, monkeypatch):
     findings = [JellyfinFinding("Correspondance", "/m/a", "/l/a"), JellyfinFinding("Correspondance", "/m/b", "/l/b"),
                 JellyfinFinding("Fichier local absent", "/m/c", "/l/c")]
     run_with(window, app, monkeypatch, Diagnosis(findings, ["ok"], True, undetermined=0))
-    assert window.jellyfin_model.rowCount() == 3
+    assert len(window.jellyfin_model.all_rows) == 3  # toutes les lignes ; rowCount() = lignes visibles
     assert window.jellyfin_proxy.rowCount() == 1
     assert "1 fichier local absent" in window.jellyfin_summary.text().lower()
     item = next(window.navigation.item(r) for r in range(window.navigation.count())

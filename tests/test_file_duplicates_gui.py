@@ -94,6 +94,7 @@ def test_search_select_quarantine_restore_and_empty(setup):
     page.quarantine(confirm=True)
     settle(window, app)
     page.empty(confirm=False)
+    settle(window, app)  # mesure de la quarantaine en tâche de fond
     assert fd.quarantine_summary(root)[1] == 2
     page.empty(confirm=True)
     settle(window, app)

@@ -1,4 +1,26 @@
-# Validation — MusicScope 0.11.0
+# Validation — MusicScope 0.12.0
+
+## Version 0.12.0 — performance
+
+Quatrième et dernier lot de l'audit. Mesures locales (latence SMB simulée par `scripts/benchmark_scan.py --latency 1` ou par les scripts de l'audit ; aucun vrai NAS) :
+
+| Opération | v0.11.0 | v0.12.0 |
+|---|---|---|
+| Scan à chaud, 13 200 pistes, 1 ms par stat, 8 threads | 50 s (54 018 stat) | 3,7 s (13 224) |
+| Affichage Jellyfin, 96 585 lignes | 10,8 s, +478 Mio | 0,06 s, +10 Mio |
+| Liste « Fichiers en double » après quarantaine, 8 000 groupes | 13,5 s | 0,55 s |
+| « Garder le meilleur », 12 331 fichiers | > 90 s | 0,01 s |
+| Comparaison de deux empreintes | 7,9 ms | 0,19 ms (résultat identique) |
+| Quarantaine de 2 000 fichiers | 51 s, 3 Go écrits | 2,9 s, 50 Mo |
+| Hachages pour ranger puis restaurer un album | 2 + 4 + 4 | 1 + 0 + 1 par fichier |
+| Lecture des tags d'un fichier avec pochette (texte) | 3,7 ms | 0,009 ms |
+| Diagnostic Jellyfin, 96 000 éléments | 21 lstat par élément | 2,8 |
+
+Autres changements : découverte parallèle (type des entrées lu par readdir, seuls les fichiers audio examinés), suppression de la phase de vérification redondante, progression limitée à 10 par seconde pour toutes les tâches, fenêtre glissante de lectures (au lieu d'un objet par fichier), audits et albums en double calculés dans le worker, une lecture d'identité par piste, rendu du détail d'album plafonné à 40 fichiers et différé pendant la navigation, mesure de la quarantaine et test de connexion Jellyfin hors du fil Qt, dialogues et menus libérés, cache des empreintes en binaire (≈ 3 fois plus petit) purgé des fichiers disparus, cache AcoustID qui expire réellement, noms génériques (« Unknown Album ») non rapprochés, journaux de quarantaine jusqu'à 256 Mio.
+
+Corrections liées : tolérance de durée et empreintes sans chaînage (A≈B≈C ne réunit plus A et C), « Même nom » insensible à la forme Unicode (NFC), liens physiques hachés une seule fois, cache et relevés de dossier qui tiennent compte de ctime (tags réécrits à taille et date égales), montage d'une racine atteinte par un lien parent, noms de dossiers avec mention technique (« [FLAC] », « [24-96] », « (2013) Titre », « Disc 1 - Bonus »), empreinte seule refusée au-delà d'un million de comparaisons.
+
+**477 tests** passent sous Python 3.12 et 3.13 (`tests/test_performance.py` : 22 des 24 tests échouent sur la v0.11.0). Non essayé : votre NAS ; le cache d'attributs du client CIFS n'est pas simulé, les gains réels peuvent être plus faibles.
 
 ## Version 0.11.0 — éditeur de tags sûr
 

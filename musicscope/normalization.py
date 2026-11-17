@@ -1,7 +1,9 @@
 """Normalisation prudente des noms, adaptée du script fourni par l'utilisateur."""
+from functools import lru_cache
 import unicodedata
 
 
+@lru_cache(maxsize=1 << 16)
 def name_key(text: str) -> str:
     """Ignore casse/ponctuation/accents latins, conserve les autres écritures.
 

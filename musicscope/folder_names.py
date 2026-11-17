@@ -26,7 +26,23 @@ PATTERNS = [
     re.compile(rf"^{YEAR}{SEP}(?P<title>.+)$"),
     # Album - 2014
     re.compile(rf"^(?P<title>.+?){SEP}{YEAR}$"),
+    # (2014) Album  /  [2014] Album
+    re.compile(rf"^[(\[]{YEAR}[)\]]\s*(?:[-–—]\s*)?(?P<title>.+)$"),
 ]
+# Mentions techniques des téléchargements, retirées en fin de nom : « [FLAC] », « (24-96) »,
+# « - WEB », « [320] »… Elles masquaient l'année et le titre.
+_TECH = (r"(?:flac|mp3|aac|alac|ogg|opus|wav|ape|dsd|web|web-?dl|cd|cdrip|vinyl|lp|hi-?res|lossless|"
+         r"v0|v2|\d{3}\s*k(?:bps)?|320|256|192|128|\d{2}\s*[-_/]\s*\d{2,3}(?:[.,]\d)?(?:\s*khz)?|\d{2}\s*bits?"
+         r"(?:\s*[-_/ ]?\s*\d{2,3}(?:[.,]\d)?\s*khz)?)")
+TECH_SUFFIX = re.compile(rf"(?:\s*[\[(]\s*{_TECH}(?:\s*[-_/ ,]\s*{_TECH})*\s*[\])]|\s+[-–—]\s+{_TECH})\s*$", re.I)
+DISC = re.compile(r"(?:cd|disc|disk|disque)[\s._-]*\d+(?:\s*[-–—:]\s*.*)?", re.I)
+
+
+def _clean(name: str) -> str:
+    previous = None
+    while previous != name:
+        previous, name = name, TECH_SUFFIX.sub("", name).strip()
+    return name or previous
 
 
 @dataclass(frozen=True)
@@ -42,9 +58,9 @@ class FolderName:
 def parse_folder(path: str | Path) -> FolderName:
     """Le dossier parent sert d'artiste quand le nom n'en contient pas."""
     path = Path(path)
-    name = path.name.strip()
+    name = _clean(path.name.strip())
     parent = path.parent.name.strip()
-    if re.fullmatch(r"(?:cd|disc|disk|disque)[\s._-]*\d+", name, flags=re.I):
+    if DISC.fullmatch(name):  # « CD1 », « Disc 1 - Bonus »
         return parse_folder(path.parent)
     for pattern in PATTERNS:
         match = pattern.match(name)

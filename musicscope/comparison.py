@@ -58,6 +58,13 @@ def _signatures(album: Album, key: str) -> set[tuple[str, ...]]:
             for signature in album.tag_signatures(key)}
 
 
+MAX_NAME_BUCKET = 50
+GENERIC_TITLES = {name_key(text) for text in ("unknown album", "untitled", "sans titre", "album inconnu",
+                                               "unknown", "inconnu", "no title")}
+GENERIC_ARTISTS = {name_key(text) for text in ("unknown artist", "artiste inconnu", "unknown", "inconnu",
+                                                "no artist")}
+
+
 def candidates(albums: Iterable[Album]) -> list[tuple[Album, Album]]:
     """Index par édition, groupe d'éditions et artiste/titre (pas par codec)."""
     albums = list(albums)
@@ -83,8 +90,13 @@ def candidates(albums: Iterable[Album]) -> list[tuple[Album, Album]]:
         if artist[0] and title:
             keys.add(("name", artist, title))
         for key in keys:
+            if key[0] == "name" and (key[2] in GENERIC_TITLES or set(key[1]) & GENERIC_ARTISTS):
+                continue  # « Unknown Album » : un nom générique ne désigne pas un même album
             index[key].append(i)
-    pairs = {pair for bucket in index.values() for pair in combinations(bucket, 2)}
+    # Un nom partagé par des dizaines d'albums ne les rapproche pas (n² paires « À vérifier ») ;
+    # les identifiants MusicBrainz restent toujours indexés.
+    pairs = {pair for key, bucket in index.items() if key[0] != "name" or len(bucket) <= MAX_NAME_BUCKET
+             for pair in combinations(bucket, 2)}
     return [(albums[i], albums[j]) for i, j in sorted(pairs)]
 
 

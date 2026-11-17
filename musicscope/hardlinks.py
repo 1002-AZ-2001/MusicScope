@@ -39,7 +39,7 @@ class LinkDiagnostic:
 def diagnose_links(root: str | Path, limit: int = 20000, cancel: Event | None = None, progress=None) -> LinkDiagnostic:
     root = Path(root).absolute()
     result = LinkDiagnostic(str(root))
-    details = mount_details(root) if os.name == "posix" else None
+    details = mount_details(os.path.realpath(root)) if os.name == "posix" else None  # chemin réel : lien parent suivi
     if details is not None:
         result.filesystem, result.mount_point = details.filesystem, details.mount_point
         result.options = sorted(option for option in details.options

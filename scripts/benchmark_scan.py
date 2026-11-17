@@ -5,13 +5,18 @@ n'ouvre jamais une médiathèque existante. Le cache est placé hors de la
 bibliothèque générée. Exemple :
 
     python scripts/benchmark_scan.py --albums 1000 --tracks 12 --json bench.json
+
+`--latency 1` simule un partage réseau (1 ms par stat, 3 ms par lecture de dossier) :
+sans elle, un disque local masque le coût des accès sur un NAS SMB.
 """
 from __future__ import annotations
 
 import argparse
 import builtins
 import json
+import os
 import platform
+import threading
 import resource
 import shutil
 import sys
@@ -59,6 +64,85 @@ def generate(destination: Path, albums: int, tracks: int, duplicate_every: int) 
     return created
 
 
+class _SlowEntry:
+    """DirEntry dont stat() coûte un aller-retour réseau ; le type (d_type) reste gratuit."""
+    __slots__ = ("_entry", "_delay")
+
+    def __init__(self, entry, delay):
+        self._entry, self._delay = entry, delay
+
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def __fspath__(self):
+        return self._entry.path
+
+    def stat(self, *, follow_symlinks=True):
+        time.sleep(self._delay)
+        return self._entry.stat(follow_symlinks=follow_symlinks)
+
+
+@contextmanager
+def simulated_latency(root: Path, stat_ms: float):
+    """Latence d'un partage réseau sous `root` : stat_ms par stat, trois fois plus par dossier lu.
+    Le cache d'attributs du client SMB n'est pas modélisé : c'est un majorant."""
+    if not stat_ms:
+        yield {}
+        return
+    prefix, delay = str(root), stat_ms / 1000
+    counts, lock = {"stat": 0, "scandir": 0}, threading.Lock()
+    original_stat, original_lstat, original_scandir = os.stat, os.lstat, os.scandir
+
+    def inside(path):
+        return not isinstance(path, int) and os.fspath(path).startswith(prefix)
+
+    def bump(kind):
+        with lock:
+            counts[kind] += 1
+
+    def slow_stat(path, *args, **kwargs):
+        if inside(path):
+            bump("stat")
+            time.sleep(delay)
+        return original_stat(path, *args, **kwargs)
+
+    def slow_lstat(path, *args, **kwargs):
+        if inside(path):
+            bump("stat")
+            time.sleep(delay)
+        return original_lstat(path, *args, **kwargs)
+
+    class SlowScandir:
+        def __init__(self, path):
+            self._iterator = original_scandir(path)
+
+        def __iter__(self):
+            for entry in self._iterator:
+                yield _SlowEntry(entry, delay)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self._iterator.close()
+
+        def close(self):
+            self._iterator.close()
+
+    def slow_scandir(path="."):
+        if inside(path):
+            bump("scandir")
+            time.sleep(3 * delay)
+            return SlowScandir(path)
+        return original_scandir(path)
+
+    os.stat, os.lstat, os.scandir = slow_stat, slow_lstat, slow_scandir
+    try:
+        yield counts
+    finally:
+        os.stat, os.lstat, os.scandir = original_stat, original_lstat, original_scandir
+
+
 @contextmanager
 def count_mountinfo_reads():
     counter = {"reads": 0}
@@ -76,15 +160,16 @@ def count_mountinfo_reads():
         builtins.open = original
 
 
-def timed_scan(root: Path, cache_path: Path, workers: int | None = None) -> dict:
-    with Cache(cache_path) as cache, count_mountinfo_reads() as counter:
+def timed_scan(root: Path, cache_path: Path, workers: int | None = None, latency_ms: float = 0) -> dict:
+    with Cache(cache_path) as cache, count_mountinfo_reads() as counter, \
+            simulated_latency(root, latency_ms) as calls:
         start = time.perf_counter()
         inventory = scan(root, cache, workers=workers)
         elapsed = time.perf_counter() - start
     tracks = sum(len(album.tracks) for album in inventory.albums)
     return {"seconds": round(elapsed, 3), "albums": len(inventory.albums), "tracks": tracks,
             "tracks_per_second": round(tracks / elapsed, 1) if elapsed else None,
-            "mountinfo_reads": counter["reads"], "errors": len(inventory.errors),
+            "mountinfo_reads": counter["reads"], "errors": len(inventory.errors), "filesystem_calls": calls,
             "inventory": inventory}
 
 
@@ -97,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--library", type=Path, help="Dossier vide où générer (défaut : temporaire)")
     parser.add_argument("--workers", type=int,
                         help="Threads de lecture (défaut : automatique selon le stockage)")
+    parser.add_argument("--latency", type=float, default=0, metavar="MS",
+                        help="Latence simulée par stat, en millisecondes (ex. 1 pour un NAS SMB)")
+    parser.add_argument("--covers", action="store_true",
+                        help="Ajouter une pochette cover.jpg et un fichier .nfo par album (fichiers non audio)")
     parser.add_argument("--keep", action="store_true", help="Conserver bibliothèque et cache")
     parser.add_argument("--json", type=Path, help="Écrire le rapport JSON dans ce fichier")
     args = parser.parse_args(argv)
@@ -113,10 +202,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         start = time.perf_counter()
         files_created = generate(library, args.albums, args.tracks, args.duplicate_every)
+        if args.covers:
+            for folder in {path.parent for path in library.rglob("*.flac")}:
+                (folder / "cover.jpg").write_bytes(b"\xff\xd8" + bytes(2048))
+                (folder / "album.nfo").write_text("<album/>", encoding="utf-8")
         generation = time.perf_counter() - start
-
-        cold = timed_scan(library, cache_path, args.workers)
-        warm = timed_scan(library, cache_path, args.workers)
+        # Avec latence simulée, le choix automatique voit un disque local : 8 threads comme sur un NAS.
+        workers = args.workers or (8 if args.latency else None)
+        cold = timed_scan(library, cache_path, workers, args.latency)
+        warm = timed_scan(library, cache_path, workers, args.latency)
         inventory = warm.pop("inventory")
         cold.pop("inventory")
 
@@ -130,7 +224,8 @@ def main(argv: list[str] | None = None) -> int:
                       "pairs": len(pairs), "statuses": statuses}
 
         report = {
-            "python": platform.python_version(), "platform": platform.platform(), "workers": args.workers or auto_workers(library),
+            "python": platform.python_version(), "platform": platform.platform(),
+            "workers": workers or auto_workers(library), "latency_ms": args.latency,
             "library": {"files": files_created, "generation_seconds": round(generation, 2)},
             "cold_scan": cold, "warm_scan": warm, "comparison": comparison,
             "max_rss_mib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
