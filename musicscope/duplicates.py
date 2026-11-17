@@ -81,7 +81,8 @@ def physical_files(album: Album) -> list[tuple[int, int, int]]:
     return [(device, inode, links) for device, inode, links, _ in _physical_by_track(album)]
 
 
-def score_album(album: Album, physical: list[tuple[int, int, int, int]] | None = None) -> CopyScore:
+def score_album(album: Album, physical: list[tuple[int, int, int, int]] | None = None,
+                spectra: dict | None = None) -> CopyScore:
     """Plus le tuple est grand, meilleure est la copie. Les raisons sont lisibles.
 
     `physical` évite de relire l'identité des pistes déjà lue par l'appelant."""
@@ -92,9 +93,22 @@ def score_album(album: Album, physical: list[tuple[int, int, int, int]] | None =
     codecs = {track.codec for track in album.tracks}
     quality = min((CODEC_RANK.get(codec, 0) for codec in codecs), default=0)
     label = ", ".join(sorted(codecs)) or "aucun codec"
+    verdict = None
+    if quality == 3 and spectra:
+        from .spectrum import REVIEW, SUSPECT, album_verdict
+        verdict = album_verdict(album, spectra)
+        if verdict is not None and verdict.verdict == SUSPECT:
+            # Faux sans-perte probable : classé sous les copies avec perte (son contenu est celui d'un
+            # MP3 de débit moyen, un vrai MP3 320 kb/s vaut mieux).
+            quality = 0.5
+            result.weaknesses.append(f"FLAC suspect : coupure vers {verdict.cutoff_khz:.0f} kHz (probablement issu "
+                                     "d’un MP3)")
+        elif verdict is not None and verdict.verdict == REVIEW:
+            quality = 2
+            result.weaknesses.append(f"FLAC à vérifier : coupure vers {verdict.cutoff_khz:.0f} kHz")
     if quality == 3:
-        result.strengths.append(f"sans perte ({label})")
-    elif quality:
+        result.strengths.append(f"sans perte ({label})" + (", spectre complet" if verdict is not None else ""))
+    elif quality and verdict is None:
         result.weaknesses.append(f"avec perte ({label})")
     filled = sum(bool(track.value(key)) for track in album.tracks for key in TAG_FIELDS)
     ratio = filled / (len(album.tracks) * len(TAG_FIELDS)) if album.tracks else 0
@@ -132,7 +146,8 @@ def _same_folder_album(left: Album, right: Album) -> bool:
     return a.key() == b.key() and bool(a.year) and a.year == b.year
 
 
-def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[DuplicateGroup]:
+def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]], spectra: dict | None = None) -> list[DuplicateGroup]:
+    """`spectra` : verdicts d'authenticité déjà mesurés (chemin de piste → résultat)."""
     parent: dict[int, int] = {}
     albums: dict[int, Album] = {}
 
@@ -170,7 +185,7 @@ def duplicate_groups(pairs: list[tuple[Album, Album, Comparison]]) -> list[Dupli
         if mixed_editions:
             confidence = UNSURE
         physical = [_physical_by_track(album) for album in group_albums]  # un stat par piste
-        scores = [score_album(album, files) for album, files in zip(group_albums, physical)]
+        scores = [score_album(album, files, spectra) for album, files in zip(group_albums, physical)]
         ranked = sorted(range(len(scores)), key=lambda index: scores[index].score, reverse=True)
         best, second = ranked[0], ranked[1]
         keep = best if scores[best].score[:-1] != scores[second].score[:-1] else None

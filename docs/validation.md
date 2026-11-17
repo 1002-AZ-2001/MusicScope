@@ -1,4 +1,19 @@
-# Validation — MusicScope 0.13.0
+# Validation — MusicScope 0.14.0
+
+## Version 0.14.0 — authenticité des FLAC
+
+Principe documenté par des outils de la communauté : un encodeur avec perte coupe les aigus (≈ 16 kHz à 128 kb/s, 19-20 kHz à 320 kb/s), coupure conservée après reconversion en FLAC ; un échantillonnage à 32 kHz doit être exclu ([losselot](https://notactuallytreyanastasio.github.io/losselot/audio-analysis), [soniqtools](https://soniqtools.pages.dev/blog/how-to-tell-if-flac-is-real)). Mesures réelles avec FFmpeg 6.1 sur bruit rose, 9 bandes d'1 kHz (niveau moyen, dB) :
+
+| Fichier | 16,5 kHz | 17,5 | 18,5 | 19,5 | 20,5 | Verdict |
+|---|---|---|---|---|---|---|
+| FLAC d'origine | −56,4 | −57,7 | −59,3 | −61,0 | −63,6 | Spectre complet |
+| depuis MP3 128 kb/s | −58,8 | −91,0 | −91,0 | −91,0 | −91,0 | Suspect (≈ 17 kHz) |
+| depuis MP3 V2 | −55,3 | −56,6 | −59,0 | −91,0 | −91,0 | À vérifier (≈ 19 kHz) |
+| depuis MP3 320 kb/s | −56,4 | −57,7 | −59,3 | −61,0 | −91,0 | À vérifier (≈ 20 kHz) |
+| depuis AAC 256 kb/s | −56,6 | −57,9 | −59,5 | −61,2 | −63,8 | Spectre complet (non détecté) |
+| FLAC filtré à 15 kHz | −68,7 | −76,7 | −87,3 | −91,0 | −91,0 | Spectre complet (pente progressive) |
+
+Limites : un AAC haut débit n'est pas détecté ; une vraie coupure de mastering peut donner « À vérifier ». Tests (`tests/test_spectrum.py`) : règles de verdict, échantillonnage à 32 kHz, passage trop calme, cache par taille et date, choix des pistes centrales, rang d'un FLAC suspect sous un vrai MP3 (albums et fichiers), mesure FFmpeg réelle, page Qualité et albums en double, résultats relus après un nouveau scan, message sans FFmpeg. La CI installe désormais FFmpeg et fpcalc pour exécuter ces tests. **503 tests** passent sous Python 3.12 et 3.13. Non essayé : votre bibliothèque réelle.
 
 ## Version 0.13.0 — qBittorrent
 

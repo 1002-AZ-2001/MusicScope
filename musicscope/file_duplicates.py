@@ -75,6 +75,7 @@ class FileRecord:
     nlink: int = 1
     aliases: list[str] = field(default_factory=list)
     seeded: str = ""  # torrent qBittorrent qui utilise ce fichier : jamais coché ni déplacé
+    spectrum: str = ""  # verdict d'authenticité du sans-perte (« Suspect », « À vérifier »…)
 
     @property
     def linked(self) -> bool:
@@ -138,7 +139,10 @@ def quality_key(record: FileRecord) -> tuple:
     tags complets, chemin le moins profond."""
     track = record.track
     tags = sum(bool(track.value(key)) for key in ("artist", "title", "album", "tracknumber")) if track else 0
-    return (CODEC_RANK.get(record.codec, 0), record.bitrate or 0, record.linked, tags, -record.path.count(os.sep),
+    rank = CODEC_RANK.get(record.codec, 0)
+    if rank == 3 and record.spectrum in ("Suspect", "À vérifier"):
+        rank = 0.5 if record.spectrum == "Suspect" else 2  # faux FLAC probable : sous un vrai MP3
+    return (rank, record.bitrate or 0, record.linked, tags, -record.path.count(os.sep),
             -len(record.path), record.path)
 
 

@@ -163,6 +163,7 @@ class FileDuplicatesPage(QWidget):
         root = window.root
         tracks = {track.path: track for album in window.inventory.albums for track in album.tracks}
         seeds = getattr(window, "seed_index", None)
+        spectra = dict(getattr(window, "spectra", {}) or {})
 
         def operation(cancel, progress):
             from .cache import Cache
@@ -176,9 +177,11 @@ class FileDuplicatesPage(QWidget):
                 records = fd.collect_files(root, options, tracks, cancel, progress)
                 with Cache(window.cache_dir / "inventory.sqlite3") as cache:
                     groups = fd.find_duplicates(records, options, cache, printer, cancel, progress)
-                if seeds is not None:
-                    for group in groups:
-                        for record in group.files:
+                for group in groups:
+                    for record in group.files:
+                        if record.path in spectra:
+                            record.spectrum = spectra[record.path].verdict
+                        if seeds is not None:
                             item = seeds.protected(record.path, record.size)
                             record.seeded = item.torrent if item is not None else ""
                 if owned is not None and not options.exclude_folders and not options.include_extensions \
@@ -223,7 +226,9 @@ class FileDuplicatesPage(QWidget):
                 folder = record.folder[len(root) + 1:] if record.folder.startswith(root + os.sep) else record.folder
                 item = QTreeWidgetItem([
                     record.name, folder or ".", byte_size(record.size),
-                    datetime.fromtimestamp(record.mtime_ns / 1e9).strftime("%d/%m/%Y %H:%M"), record.codec,
+                    datetime.fromtimestamp(record.mtime_ns / 1e9).strftime("%d/%m/%Y %H:%M"),
+                    record.codec + (f" ({record.spectrum.lower()})" if record.spectrum in ("Suspect", "À vérifier")
+                                    else ""),
                     f"{record.bitrate} kb/s" if record.bitrate else "", f"{record.duration:.1f} s" if record.duration else "",
                     str(record.nlink) + (f" (+{len(record.aliases)} ici)" if record.aliases else "")
                     + (" • seed" if record.seeded else "")])
