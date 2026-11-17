@@ -882,8 +882,9 @@ class AdvancedWindow(MainWindow):
         self.run_task("Consultation des pochettes Cover Art Archive…", operation, done, cancellable=False)
 
     # Éditeur de tags : saisie, aperçu, écriture journalisée puis actualisation par scan.
-    def edit_tags(self, dialog_values=None, confirm=None):
-        """`dialog_values` (valeurs d'album, valeurs de pistes) et `confirm` servent aux tests."""
+    def edit_tags(self, dialog_values=None, confirm=None, image_data=None, cover_file=False):
+        """`dialog_values` (valeurs d'album, valeurs de pistes), `image_data`, `cover_file` et
+        `confirm` servent aux tests ; sinon le dialogue les fournit."""
         if not self._fresh() or self.task is not None:
             return
         selected = self._selected(1)
@@ -894,15 +895,28 @@ class AdvancedWindow(MainWindow):
         from .tagwriter import TagJournal, plan_album_edits
         if dialog_values is None:
             verification = self.verifications.get(album.path)
-            dialog = TagEditorDialog(album, getattr(verification, "proposals", None), self)
+            dialog = TagEditorDialog(album, getattr(verification, "proposals", None), self, artworks=self.artworks)
             try:
                 if dialog.exec() != QDialog.DialogCode.Accepted:
                     return
-                edits = dialog.edits()
+                try:
+                    edits = dialog.edits()
+                except ValueError as exc:  # MBID ou total mal saisi
+                    self.show_error(f"Modification refusée : {exc}")
+                    return
+                image_data = dialog.image_data
             finally:
                 getattr(dialog, "deleteLater", lambda: None)()
         else:
-            edits = plan_album_edits(album, *dialog_values)
+            from .tag_editor_gui import read_live_values
+            from .tagwriter import cover_file_edit
+            from .tagfields import image_reference
+            album_values, track_values = dialog_values
+            if image_data is not None:
+                album_values = {**album_values, "artwork": image_reference(image_data)}
+            edits = plan_album_edits(album, album_values, track_values, read_live_values(album))
+            if cover_file and "artwork" in album_values:
+                edits.append(cover_file_edit(album, album_values["artwork"] or None))
         if not edits:
             self.state.setText("Aucune différence avec les tags actuels : rien à écrire.")
             return
@@ -926,6 +940,8 @@ class AdvancedWindow(MainWindow):
             return
         def operation(cancel, progress):
             with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
+                if image_data is not None:
+                    journal.store_image(image_data)  # gardée pour l'écriture puis l'annulation
                 return journal.apply(edits, album.path, cancel=cancel, progress=progress)
         def done(result):
             self._tags_written(result, "écrits")
