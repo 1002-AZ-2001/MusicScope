@@ -1,3 +1,3 @@
 """MusicScope : outils d'audit musical sans modification des sources."""
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"

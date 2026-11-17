@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
@@ -32,13 +33,29 @@ from uuid import uuid4
 import mutagen
 
 from .models import Album
+from . import tagfields
 
-# Champs modifiables, identiques pour FLAC, Ogg, Opus (Vorbis), MP3 (ID3) et M4A (MP4).
-EDITABLE_FIELDS = ("albumartist", "album", "date", "genre", "discnumber", "tracknumber", "title", "artist")
+# Champs modifiables pour FLAC, Ogg, Opus (Vorbis), MP3 (ID3) et M4A (MP4) ; quelques-uns
+# n'existent pas en MP4 (voir tagfields.UNSUPPORTED).
+BASE_FIELDS = ("albumartist", "album", "date", "genre", "discnumber", "tracknumber", "title", "artist")
+EXTENDED_FIELDS = ("tracktotal", "disctotal", "compilation", "composer", "conductor", "performer", "lyrics",
+                   "comment", "musicbrainz_albumid", "musicbrainz_albumartistid", "musicbrainz_artistid",
+                   "musicbrainz_releasegroupid", "musicbrainz_trackid", "musicbrainz_releasetrackid")
+ARTWORK, COVER_FILE = "artwork", "coverfile"  # pochette intégrée ; fichier cover.jpg du dossier
+EDITABLE_FIELDS = BASE_FIELDS + EXTENDED_FIELDS + (ARTWORK,)
+MBID_FIELDS = {key for key in EXTENDED_FIELDS if key.startswith("musicbrainz_")}
 FIELD_LABELS = {
     "albumartist": "Artiste d’album", "album": "Album", "date": "Date", "genre": "Genre",
     "discnumber": "Disque", "tracknumber": "N°", "title": "Titre", "artist": "Artiste",
+    "tracktotal": "Total de pistes", "disctotal": "Total de disques", "compilation": "Compilation",
+    "composer": "Compositeur", "conductor": "Chef d’orchestre", "performer": "Interprètes",
+    "lyrics": "Paroles", "comment": "Commentaire",
+    "musicbrainz_albumid": "MBID d’édition", "musicbrainz_albumartistid": "MBID d’artiste d’album",
+    "musicbrainz_artistid": "MBID d’artiste", "musicbrainz_releasegroupid": "MBID de groupe d’éditions",
+    "musicbrainz_trackid": "MBID d’enregistrement", "musicbrainz_releasetrackid": "MBID de piste",
+    ARTWORK: "Pochette intégrée", COVER_FILE: "Fichier de pochette",
 }
+UUID_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 SEPARATOR = ";"
 
 
@@ -79,12 +96,16 @@ class Batch:
 
 
 def plan_album_edits(album: Album, album_values: dict[str, str],
-                     track_values: dict[str, dict[str, str]]) -> list[FileEdit]:
+                     track_values: dict[str, dict[str, str]],
+                     current_values: dict[str, dict[str, str]] | None = None) -> list[FileEdit]:
     """Différences entre les valeurs saisies et les tags de l'inventaire.
 
     `album_values` s'applique à toutes les pistes ; un champ absent du
     dictionnaire n'est pas modifié. `track_values` est indexé par chemin.
-    Seuls les fichiers dont au moins un champ change sont retenus.
+    `current_values` donne la valeur actuelle des champs que le scan ne relève pas
+    (compositeur, paroles…), lue dans les fichiers. Seuls les fichiers dont au moins un
+    champ change sont retenus ; un champ absent du format (ex. chef d'orchestre en M4A)
+    est ignoré pour ce fichier.
     """
     for key in (*album_values, *(key for values in track_values.values() for key in values)):
         if key not in EDITABLE_FIELDS:
@@ -92,15 +113,51 @@ def plan_album_edits(album: Album, album_values: dict[str, str],
     edits = []
     for track in album.ordered_tracks:
         wanted = {**album_values, **track_values.get(track.path, {})}
+        kind = "MP4" if track.codec in ("AAC", "ALAC") else ""
+        live = (current_values or {}).get(track.path, {})
         changes, current = {}, {}
         for key, text in wanted.items():
-            values = split_values(text)
-            if join_values(values) != join_values(split_values(track.value(key))):
+            if key in tagfields.UNSUPPORTED.get(kind, ()):
+                continue
+            values = [text] if key in (ARTWORK, "lyrics") and text else split_values(text)
+            if key in MBID_FIELDS and any(not UUID_TEXT.fullmatch(value) for value in values):
+                raise ValueError(f"{FIELD_LABELS[key]} invalide : un identifiant MusicBrainz a la forme "
+                                 "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
+            if key in ("tracktotal", "disctotal") and any(not value.isdigit() for value in values):
+                raise ValueError(f"{FIELD_LABELS[key]} : un nombre entier est attendu.")
+            if key == "compilation":
+                values = ["1"] if values and values[0] not in ("0", "non", "Non") else []
+            before = live.get(key, track.value(key))
+            if key in (ARTWORK, "lyrics"):
+                changed = values != ([before] if before else [])
+            elif key in ("tracknumber", "discnumber"):
+                # « 3 » face à « 3/12 » : même numéro, le total est géré par son propre champ.
+                changed = [value.split("/", 1)[0].strip() for value in values] != \
+                    [value.split("/", 1)[0].strip() for value in split_values(before)]
+            else:
+                changed = join_values(values) != join_values(split_values(before))
+            if changed:
                 changes[key] = values
-                current[key] = track.value(key)
+                current[key] = before
         if changes:
             edits.append(FileEdit(track.path, track.size, track.mtime_ns, changes, current))
     return edits
+
+
+def cover_file_edit(album: Album, image_ref: str | None) -> FileEdit:
+    """Modification du fichier de pochette du dossier (cover.jpg ou cover.png) ; None le retire."""
+    folder = Path(album.path)
+    mime = image_ref.split(":", 1)[1] if image_ref else ""
+    name = "cover.png" if mime == "image/png" else "cover.jpg"
+    existing = [folder / candidate for candidate in ("cover.jpg", "cover.png") if (folder / candidate).is_file()]
+    target = existing[0] if existing and (image_ref is None or existing[0].name == name) else folder / name
+    try:
+        info = target.stat()
+        size, mtime = info.st_size, info.st_mtime_ns
+    except OSError:
+        size = mtime = -1
+    return FileEdit(str(target), size, mtime, {COVER_FILE: [image_ref] if image_ref else []},
+                    {COVER_FILE: "fichier existant" if size >= 0 else ""})
 
 
 # Cadres ID3v2.4 que mutagen retire en enregistrant au format v2.3 (update_to_v23) : tri
@@ -137,17 +194,48 @@ class _Tags:
     def _id3(self):
         return getattr(self.audio.tags, "_EasyID3__id3", None)  # ID3 sous-jacent d'EasyID3
 
+    def _mp4(self):
+        return getattr(self.audio.tags, "_EasyMP4Tags__mp4", None)  # atomes sous-jacents d'EasyMP4
+
+    def _native(self, key: str) -> str:
+        """Nom du champ dans l'interface « easy » de ce format."""
+        if key == "performer" and self.kind == "MP3":
+            return "performer:"  # TMCL, rôle vide
+        return key
+
+    def covers(self) -> list[tuple[str, bytes]]:
+        return tagfields.read_front_covers(self.audio, self.kind, self._id3(), self._mp4())
+
     def get(self, key: str) -> list[str]:
+        if key in tagfields.UNSUPPORTED.get(self.kind, ()):
+            return []
+        if key == ARTWORK:
+            return [tagfields.image_reference(data) for _, data in self.covers()[:1]]
+        if key in ("tracktotal", "disctotal") and self.kind in ("MP3", "MP4"):
+            number = self.get("tracknumber" if key == "tracktotal" else "discnumber")
+            total = number[0].split("/", 1)[1].strip() if number and "/" in number[0] else ""
+            return [total] if total and total != "0" else []
         try:
-            return [str(value) for value in self.tags.get(key, [])]
+            return [str(value) for value in self.tags.get(self._native(key), [])]
         except (KeyError, ValueError):
             return []
 
     def normalized(self, key: str, values: list[str]) -> list[str]:
         """Valeurs telles que ce format les relira (ID3v2.3 n'a qu'un texte par cadre ;
         un numéro M4A garde le total déjà présent)."""
+        if key == "compilation":
+            return ["1"] if values and values[0] not in ("0", "") else []
+        if key in (ARTWORK, "lyrics", "comment"):
+            return [values[0]] if values else []
         if self.id3_version == 3 and len(values) > 1:
             return [join_values(values)]
+        if self.kind in ("MP3", "MP4") and key in _MP4_NUMBERS and len(values) == 1 and "/" not in values[0]:
+            # Le total vit dans le même cadre (« 4/12 ») : il est gardé quand seul le numéro change.
+            current = self.get(key)
+            if current and "/" in current[0]:
+                total = current[0].split("/", 1)[1]
+                if total.strip() not in {"", "0"}:
+                    return [f"{values[0]}/{total}"]
         if self.kind == "MP4" and key in _MP4_NUMBERS and len(values) == 1 and "/" not in values[0]:
             current = self.get(key)
             if current and "/" in current[0]:
@@ -174,15 +262,35 @@ class _Tags:
                 values.setdefault(alias, self.get(alias))
         return values
 
-    def set(self, key: str, values: list[str]) -> list[str]:
-        """Écrit le champ, retire ses variantes, et renvoie les valeurs attendues à la relecture."""
+    def set(self, key: str, values: list[str], images=None) -> list[str]:
+        """Écrit le champ, retire ses variantes, et renvoie les valeurs attendues à la relecture.
+
+        `images` donne le contenu (type, octets) d'une pochette d'après sa référence."""
+        if key in tagfields.UNSUPPORTED.get(self.kind, ()):
+            raise ValueError(f"{FIELD_LABELS.get(key, key)} : champ absent de ce format")
         values = self.normalized(key, values)
+        if key == ARTWORK:
+            image = images(values[0]) if values else None
+            if values and image is None:
+                raise ValueError("Image de pochette introuvable dans le journal")
+            tagfields.write_front_cover(self.audio, self.kind, image, self._id3(), self._mp4())
+            return values
+        if key in ("tracktotal", "disctotal") and self.kind in ("MP3", "MP4"):
+            number_key = "tracknumber" if key == "tracktotal" else "discnumber"
+            current = self.get(number_key)
+            number = current[0].split("/", 1)[0].strip() if current else ""
+            if not number and values:
+                raise ValueError(f"{FIELD_LABELS[key]} : indiquez d’abord le numéro (il partage le même cadre)")
+            if number:
+                self.tags[number_key] = [f"{number}/{values[0]}" if values else number]
+            return values
+        native = self._native(key)
         for alias in self.aliases(key):
             del self.tags[alias]
         if values:
-            self.tags[key] = values
-        elif key in self.tags:
-            del self.tags[key]
+            self.tags[native] = values
+        elif native in self.tags:
+            del self.tags[native]
         return values
 
     def save(self, target: Path | None = None) -> None:
@@ -217,7 +325,35 @@ def _temporary_copy(path: Path) -> Path:
     return temporary
 
 
-def _write(path: Path, values: dict[str, list[str]], source: _Tags | None = None) -> None:
+def _write_cover_file(path: Path, values: list[str], images) -> None:
+    """Fichier de pochette du dossier, écrit sur une copie puis substitué ; [] le retire."""
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError("Lien ignoré")
+    if path.exists() and path.stat().st_nlink > 1:
+        raise ValueError(LINKED_MESSAGE)
+    if not values:
+        if path.exists():
+            path.unlink()
+        return
+    image = images(values[0])
+    if image is None:
+        raise ValueError("Image de pochette introuvable dans le journal")
+    temporary = path.with_name(f".{path.name}.{uuid4().hex[:12]}.musicscope-tmp")
+    try:
+        with open(temporary, "xb") as stream:
+            stream.write(image[1])
+            stream.flush()
+            os.fsync(stream.fileno())
+        if tagfields.image_reference(temporary.read_bytes()) != values[0]:
+            raise ValueError("Relecture différente pour la pochette")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _write(path: Path, values: dict[str, list[str]], source: _Tags | None = None, images=None) -> None:
     """Écrit sur une copie, la relit, puis la substitue au fichier d'origine.
 
     Une coupure (réseau, alimentation) pendant l'écriture ne touche que la copie : le
@@ -231,7 +367,9 @@ def _write(path: Path, values: dict[str, list[str]], source: _Tags | None = None
     temporary = _temporary_copy(path)
     try:
         tags = _Tags(temporary, source.kind_class)
-        expected = {key: tags.set(key, new) for key, new in values.items()}
+        # Totaux avant numéros : en MP3 et M4A, « 4/12 » partage un même cadre.
+        ordered = sorted(values.items(), key=lambda item: item[0] not in ("tracktotal", "disctotal"))
+        expected = {key: tags.set(key, new, images) for key, new in ordered}
         tags.save()
         check = _Tags(temporary, source.kind_class)
         for key, new in expected.items():
@@ -298,8 +436,22 @@ class TagJournal:
                 old_json TEXT NOT NULL, new_json TEXT NOT NULL, status TEXT NOT NULL,
                 error TEXT NOT NULL DEFAULT '', PRIMARY KEY (batch_id, path)
             );
+            CREATE TABLE IF NOT EXISTS tag_images (
+                ref TEXT PRIMARY KEY, data BLOB NOT NULL
+            );
         """)
         self.db.commit()
+
+    def store_image(self, data: bytes) -> str:
+        """Garde le contenu d'une pochette (avant ou après) pour l'écriture et l'annulation."""
+        ref = tagfields.image_reference(data)
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO tag_images VALUES (?, ?)", (ref, data))
+        return ref
+
+    def image(self, ref: str) -> tuple[str, bytes] | None:
+        row = self.db.execute("SELECT data FROM tag_images WHERE ref=?", (ref,)).fetchone()
+        return (ref.split(":", 1)[1], bytes(row[0])) if row else None
 
     def close(self) -> None:
         self.db.close()
@@ -327,16 +479,24 @@ class TagJournal:
                 result.cancelled = True
                 break
             path = Path(edit.path)
+            cover_file = COVER_FILE in edit.changes
             try:
                 if path.is_symlink():
                     raise ValueError("Lien ignoré")
-                stat = path.stat()
-                if (stat.st_size, stat.st_mtime_ns) != (edit.size, edit.mtime_ns):
-                    raise ValueError("Fichier modifié depuis l’analyse ; relancez l’analyse")
-                if stat.st_nlink > 1:
-                    raise ValueError(LINKED_MESSAGE)
-                tags = _Tags(path)
-                old = tags.snapshot(edit.changes)
+                if cover_file:
+                    tags = None
+                    old = {COVER_FILE: self._cover_snapshot(path, edit)}
+                else:
+                    stat = path.stat()
+                    if (stat.st_size, stat.st_mtime_ns) != (edit.size, edit.mtime_ns):
+                        raise ValueError("Fichier modifié depuis l’analyse ; relancez l’analyse")
+                    if stat.st_nlink > 1:
+                        raise ValueError(LINKED_MESSAGE)
+                    tags = _Tags(path)
+                    old = tags.snapshot(edit.changes)
+                    if ARTWORK in edit.changes:
+                        for _, data in tags.covers()[:1]:
+                            self.store_image(data)  # l'annulation pourra la remettre
             except (OSError, ValueError, mutagen.MutagenError) as exc:
                 result.failed.append((edit.path, str(exc)))
                 continue
@@ -345,7 +505,10 @@ class TagJournal:
                 self.db.execute("INSERT INTO tag_entries VALUES (?, ?, ?, ?, 'pending', '')",
                                 (batch_id, edit.path, json.dumps(old), json.dumps(edit.changes)))
             try:
-                _write(path, edit.changes, tags)
+                if cover_file:
+                    _write_cover_file(path, edit.changes[COVER_FILE], self.image)
+                else:
+                    _write(path, edit.changes, tags, self.image)
             except (OSError, ValueError, mutagen.MutagenError) as exc:
                 # L'écriture se fait sur une copie : le fichier d'origine n'a pas été remplacé.
                 error, status = str(exc), "failed_restored"
@@ -361,6 +524,22 @@ class TagJournal:
             if progress:
                 progress(index, len(edits), edit.path)
         return result
+
+    def _cover_snapshot(self, path: Path, edit: FileEdit) -> list[str]:
+        if not path.exists():
+            if edit.size >= 0:
+                raise ValueError("Fichier de pochette disparu depuis l’aperçu")
+            return []
+        stat = path.stat()
+        if (stat.st_size, stat.st_mtime_ns) != (edit.size, edit.mtime_ns):
+            raise ValueError("Fichier de pochette modifié depuis l’aperçu")
+        if stat.st_nlink > 1:
+            raise ValueError(LINKED_MESSAGE)
+        data = path.read_bytes()
+        try:
+            return [self.store_image(data)]
+        except ValueError:
+            raise ValueError("Fichier de pochette existant illisible (ni JPEG ni PNG) : il n’est pas remplacé")
 
     def batches(self) -> list[Batch]:
         rows = self.db.execute("""
@@ -393,14 +572,23 @@ class TagJournal:
             try:
                 if path.is_symlink():
                     raise ValueError("Lien ignoré")
-                tags = _Tags(path)
-                current = {key: tags.get(key) for key in new}
-                if current == {key: tags.normalized(key, old.get(key, [])) for key in new}:
-                    pass  # écriture interrompue avant modification : rien à restaurer
-                elif current != {key: tags.normalized(key, values) for key, values in new.items()}:
-                    raise ValueError("Tags modifiés depuis l’écriture ; annulation refusée pour ce fichier")
+                if COVER_FILE in new:
+                    current = [tagfields.image_reference(path.read_bytes())] if path.exists() else []
+                    if current == old.get(COVER_FILE, []):
+                        pass  # rien n'a été écrit
+                    elif current != new[COVER_FILE]:
+                        raise ValueError("Pochette modifiée depuis l’écriture ; annulation refusée pour ce fichier")
+                    else:
+                        _write_cover_file(path, old.get(COVER_FILE, []), self.image)
                 else:
-                    _write(path, old, tags)
+                    tags = _Tags(path)
+                    current = {key: tags.get(key) for key in new}
+                    if current == {key: tags.normalized(key, old.get(key, [])) for key in new}:
+                        pass  # écriture interrompue avant modification : rien à restaurer
+                    elif current != {key: tags.normalized(key, values) for key, values in new.items()}:
+                        raise ValueError("Tags modifiés depuis l’écriture ; annulation refusée pour ce fichier")
+                    else:
+                        _write(path, old, tags, self.image)
             except (OSError, ValueError, mutagen.MutagenError) as exc:
                 result.failed.append((path_text, str(exc)))
             else:
@@ -424,11 +612,14 @@ def proposals_to_values(proposals, album: Album) -> tuple[dict[str, str], dict[s
     """
     per_track: dict[str, dict[str, str]] = {}
     for proposal in proposals:
-        if proposal.field in EDITABLE_FIELDS:
+        if proposal.field in MBID_FIELDS and not UUID_TEXT.fullmatch(str(proposal.proposed)):
+            continue  # identifiant malformé : jamais proposé
+        if proposal.field in EDITABLE_FIELDS and proposal.field != ARTWORK:
             per_track.setdefault(proposal.path, {})[proposal.field] = proposal.proposed
     album_values = {}
     paths = {track.path for track in album.tracks}
-    for key in ("albumartist", "album", "date", "genre"):
+    for key in ("albumartist", "album", "date", "genre", "tracktotal", "disctotal", "musicbrainz_albumid",
+                "musicbrainz_albumartistid", "musicbrainz_releasegroupid"):
         proposed = {values[key] for path, values in per_track.items() if key in values and path in paths}
         if len(proposed) == 1 and all(key in per_track.get(path, {}) or track_value == next(iter(proposed))
                                       for path, track_value in ((t.path, t.value(key)) for t in album.tracks)):
@@ -438,7 +629,22 @@ def proposals_to_values(proposals, album: Album) -> tuple[dict[str, str], dict[s
     return album_values, {path: values for path, values in per_track.items() if values and path in paths}
 
 
+def _shown(key: str, value) -> str:
+    if key in (ARTWORK, COVER_FILE):
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        if not value:
+            return ""
+        if ":" in value and len(value.split(":", 1)[0]) == 64:
+            return "image " + value.split(":", 1)[1].removeprefix("image/").upper()
+        return value
+    if key == "lyrics":
+        text = value[0] if isinstance(value, list) and value else (value or "")
+        return (text[:60] + "…") if len(text) > 60 else text
+    return join_values(value) if isinstance(value, list) else value
+
+
 def describe(edits: list[FileEdit]) -> list[tuple[str, str, str, str]]:
     """Lignes d'aperçu : fichier, champ, avant, après."""
-    return [(os.path.basename(edit.path), FIELD_LABELS.get(key, key), edit.current.get(key, ""), join_values(values))
-            for edit in edits for key, values in edit.changes.items()]
+    return [(os.path.basename(edit.path), FIELD_LABELS.get(key, key), _shown(key, edit.current.get(key, "")),
+             _shown(key, values)) for edit in edits for key, values in edit.changes.items()]

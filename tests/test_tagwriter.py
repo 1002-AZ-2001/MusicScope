@@ -216,7 +216,12 @@ def test_musicbrainz_proposals_limited_to_editable_fields(tmp_path):
     proposals = [SimpleNamespace(path=first.path, field="album", proposed="Vrai album"),
                  SimpleNamespace(path=second.path, field="album", proposed="Vrai album"),
                  SimpleNamespace(path=first.path, field="title", proposed="Vrai titre"),
-                 SimpleNamespace(path=first.path, field="musicbrainz_albumid", proposed="mbid")]
+                 SimpleNamespace(path=first.path, field="musicbrainz_albumid", proposed="mbid"),
+                 SimpleNamespace(path=first.path, field="musicbrainz_trackid",
+                                 proposed="11111111-2222-3333-4444-555555555555"),
+                 SimpleNamespace(path=first.path, field="isrc", proposed="FRXXX")]
     album_values, track_values = proposals_to_values(proposals, album)
     assert album_values == {"album": "Vrai album"}
-    assert track_values == {first.path: {"title": "Vrai titre"}}
+    # Identifiant malformé et champ non modifiable écartés ; MBID valide repris.
+    assert track_values == {first.path: {"title": "Vrai titre",
+                                         "musicbrainz_trackid": "11111111-2222-3333-4444-555555555555"}}

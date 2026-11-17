@@ -1,4 +1,8 @@
-# Validation — MusicScope 0.14.1
+# Validation — MusicScope 0.15.0
+
+## Version 0.15.0 — éditeur de tags enrichi
+
+Correspondances : celles de mutagen 1.48 (EasyID3 : `TCMP`, `TCOM`, `TPE3`, `TMCL`, `UFID:http://musicbrainz.org` pour `musicbrainz_trackid` ; EasyMP4 : `©cmt`, atomes libres `MusicBrainz …`), complétées pour ID3 (`USLT`, `COMM`) et MP4 (`©wrt`, `©lyr`, `cpil`, `MusicBrainz Release Group Id`, `MusicBrainz Release Track Id`) ; noms Vorbis de Picard (`MUSICBRAINZ_TRACKID` = enregistrement, `MUSICBRAINZ_RELEASETRACKID` = piste, d'après [le forum MetaBrainz](https://community.metabrainz.org/t/what-does-musicbrainz-trackid-signify/650381)). Tests (`tests/test_tag_editor_fields.py`) pour FLAC, MP3, M4A, Ogg et Opus : écriture, relecture par le scanner et annulation des champs étendus ; chef d'orchestre et interprètes ignorés en M4A ; total MP3 dans `TRCK` ; pochette intégrée remplacée puis rétablie depuis le journal ; `cover.jpg` écrit puis retiré à l'annulation, jamais remplacé s'il est lié ; refus d'un MBID ou d'un total invalides ; image JPEG/PNG de 16 Mio au plus ; dialogue (valeurs lues dans les fichiers, aucune modification si rien ne change) ; écriture depuis la fenêtre avec nouvel inventaire. La fenêtre a été contrôlée par capture. **521 tests** passent sous Python 3.12 et 3.13.
 
 ## Version 0.14.1 — contrôle du contenu au rangement
 
