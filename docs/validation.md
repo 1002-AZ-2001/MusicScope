@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.16.0
+# Validation — MusicScope 0.17.0
+
+## Version 0.17.0 — Travail du NAS (TrueNAS SCALE)
+
+Image `python:3.12-slim-bookworm` avec FFmpeg et Mutagen seulement (pas de Qt), utilisateur `apps` (568:568, défaut de TrueNAS). Construite et lancée localement : sans réseau (`--network none`), racine du conteneur en lecture seule, toutes capacités retirées, `no-new-privileges`, médiathèque montée en lecture seule. Sur le jeu de démonstration : 16 pistes, 14 SHA-256, 7 spectres (une piste par album) ou 14 (`--spectrum all`). Le résultat, importé sur une copie de la médiathèque placée sous une autre racine, reprend 16 pistes, 14 SHA-256 et 7 spectres, sans aucun fichier relu. Le workflow de publication refait ce test dans l'image avant de la pousser sur GHCR. Tests (`tests/test_nas.py`) : export à chemins relatifs, écriture atomique ; import sous une autre racine (cache du scan, SHA-256 et spectres) ; fichiers de taille différente, à date décalée de 5 µs ou absents laissés au scan, et décalage de 500 ns accepté (pas de 100 ns de SMB) ; chemins absolus, remontants (`..`), Windows ou avec caractère nul refusés ; fichier d'un autre format ou lié refusé ; commande sans interface qui fonctionne avec PySide6 bloqué, refus d'un dossier de sortie dans la médiathèque et d'un `--every` nul ; import depuis la fenêtre suivi d'un scan. **544 tests** passent sous Python 3.12 et 3.13. Non essayé : un vrai TrueNAS, l'import sur un vrai partage SMB, et le téléchargement de l'image publiée.
+
 
 ## Version 0.16.0 — Lidarr et Jellyfin prévenus
 
