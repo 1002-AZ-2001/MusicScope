@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from .paths import check_cache_outside_library
 from .gui import MainWindow, RelativePathDelegate, append_row, escaped, make_browser, make_table
 from .organizer import QUARANTINE_DIR
 
@@ -347,6 +348,7 @@ class AdvancedWindow(MainWindow):
         self._action(sources, "Diagnostic Jellyfin : configurer et comparer le catalogue…", self.start_jellyfin)
         self._action(sources, "qBittorrent : lire les torrents et protéger leurs fichiers…", self.connect_qbittorrent)
         self._action(sources, "Lidarr : relire les dossiers modifiés (et prévenir Jellyfin)…", self.configure_lidarr)
+        self._action(sources, "Importer le travail du NAS (tags, SHA-256, spectre)…", self.import_nas_work)
         sources.addSeparator()
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
@@ -480,6 +482,41 @@ class AdvancedWindow(MainWindow):
                 self.tabs.setCurrentIndex(self.quality_index)
 
         self.run_task("Analyse du spectre des FLAC…", operation, done)
+
+    def import_nas_work(self, path=None):
+        """Reprend les lectures faites par le conteneur du NAS, puis relance un scan (rapide :
+        seuls les fichiers modifiés depuis son passage sont relus)."""
+        if self.task is not None:
+            return
+        if not self.root:
+            self.state.setText("Choisissez d’abord la racine de la médiathèque (vue par ce poste).")
+            return
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "Fichier de travail du NAS", str(Path(self.root).parent),
+                                                  "Travail du NAS (musicscope-nas.json.gz)")
+            if not path:
+                return
+        root = self.root
+        from .cache import Cache
+        from .nas import import_work
+        from .spectrum import SpectrumCache
+
+        def operation(cancel, progress):
+            check_cache_outside_library(self.cache_dir, Path(root))
+            with Cache(self.cache_dir / "inventory.sqlite3") as cache, \
+                    SpectrumCache(self.cache_dir / "spectrum.sqlite3") as spectra:
+                return import_work(path, root, cache, spectra, cancel, progress)
+
+        def done(report):
+            text = (f"Travail du NAS ({report.created_at[:16].replace('T', ' ')}, racine {report.root}) : "
+                    f"{report.imported} piste(s), {report.hashes} SHA-256 et {report.spectra} spectre(s) repris")
+            if report.changed or report.missing:
+                text += f" ; {report.changed} modifié(s) et {report.missing} absent(s) depuis : relus par le scan"
+            self.service_log = (getattr(self, "service_log", []) + [text])[-20:]
+            self.state.setText(text + ". Actualisation…")
+            self._start_after_task(self.start_scan)
+
+        self.run_task("Import du travail du NAS…", operation, done)
 
     def configure_lidarr(self, config=None):
         from .services_gui import configure_lidarr

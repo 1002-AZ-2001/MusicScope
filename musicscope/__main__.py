@@ -18,7 +18,28 @@ def main() -> int:
     parser.add_argument("--demo", type=Path, metavar="DOSSIER", help="Créer le jeu synthétique dans un dossier vide")
     parser.add_argument("--scan", type=Path, metavar="RACINE", help="Inventorier sans interface et afficher du JSON")
     parser.add_argument("--workers", type=int, metavar="N", help="Threads de lecture pour --scan (défaut : automatique)")
+    parser.add_argument("--nas-work", type=Path, metavar="RACINE",
+                        help="Sur le NAS : tags, SHA-256 et spectre, exportés pour l'interface (voir docs/truenas.md)")
+    parser.add_argument("--out", type=Path, metavar="DOSSIER", help="Dossier du fichier musicscope-nas.json.gz")
+    parser.add_argument("--spectrum", choices=("one", "all", "none"), default="one",
+                        help="Spectre des FLAC : une piste par album, toutes, ou aucun")
+    parser.add_argument("--no-hash", action="store_true", help="Ne pas calculer les SHA-256")
+    parser.add_argument("--every", type=float, metavar="HEURES", help="Recommencer toutes les N heures")
     args = parser.parse_args()
+    if args.nas_work:
+        # Mode sans interface : n'importe pas Qt (le conteneur du NAS ne l'installe pas).
+        if args.out is None:
+            parser.error("--nas-work demande --out DOSSIER")
+        if args.every is not None and not args.every > 0:
+            parser.error("--every demande un nombre d'heures positif")
+        from .nas import main as nas_main
+        try:
+            check_cache_outside_library(args.cache, args.nas_work)
+            check_cache_outside_library(args.out, args.nas_work)
+        except ValueError as exc:
+            print(f"MusicScope : {exc}", file=sys.stderr)
+            return 1
+        return nas_main(args)
     try:
         if args.self_test:
             from .selftest import self_test

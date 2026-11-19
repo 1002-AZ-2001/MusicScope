@@ -1,0 +1,11 @@
+.git
+.venv
+build
+dist
+release
+tests
+**/__pycache__
+HANDOFF.MD
+HANDOFF.MD.lock
+AGENTS.md
+*.egg-info
