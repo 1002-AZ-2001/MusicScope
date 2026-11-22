@@ -25,7 +25,8 @@ def byte_label(value) -> str:
 
 
 class JellyfinDialog(QDialog):
-    """Configuration du diagnostic. La clé API reste dans la session ; elle n'est jamais enregistrée."""
+    """Configuration du diagnostic. La clé API reste dans la session, sauf si elle est mémorisée
+    dans le trousseau du système ; les préférences n'en contiennent jamais."""
     def __init__(self, root, previous=None, parent=None, client_factory=None):
         super().__init__(parent)
         previous = previous or {}
@@ -41,7 +42,7 @@ class JellyfinDialog(QDialog):
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         self.token.setPlaceholderText("Tableau de bord Jellyfin → Clés API")
         form.addRow("Adresse du serveur", self.server)
-        form.addRow("Clé API (session seulement)", self.token)
+        form.addRow("Clé API", self.token)
         test_row = QHBoxLayout()
         self.test_button = QPushButton("Tester la connexion")
         self.test_button.clicked.connect(self.test_connection)
@@ -380,6 +381,10 @@ class AdvancedWindow(MainWindow):
         from .update_gui import UpdateController
         self.updater = UpdateController(self)
         self.updater.install_menu(self.help_menu)
+        from .services_gui import restore_remembered
+        restored = restore_remembered(self)  # trousseau ouvert seulement si une clé y a été mémorisée
+        if restored:
+            self.state.setText(f"{' et '.join(restored)} : clé reprise du trousseau du système.")
 
     def album_actions(self, selected):
         actions = super().album_actions(selected)
@@ -734,24 +739,38 @@ class AdvancedWindow(MainWindow):
         saved = self._preferences().get("jellyfin")
         return saved if isinstance(saved, dict) else {}
 
-    def start_jellyfin(self, server_url=None, api_key=None, mappings=None, library_id=""):
+    def start_jellyfin(self, server_url=None, api_key=None, mappings=None, library_id="", dialog_hook=None):
         if not self._fresh() or self.task is not None:
             return
         from .jellyfin import JellyfinClient, PathMapping
+        from .keychain import account, recall, remember
         interactive = server_url is None
         if interactive:
-            dialog = JellyfinDialog(self.root, self._jellyfin_previous(), self)
+            from .keychain_gui import RememberRow, attach
+            previous = dict(self._jellyfin_previous())
+            if previous.get("server") and not previous.get("key"):
+                name = account("jellyfin", previous["server"])
+                previous["key"] = recall(self, "jellyfin", [name]).get(name, "")
+            dialog = JellyfinDialog(self.root, previous, self)
+            row = RememberRow(self, "jellyfin", lambda: [account("jellyfin", dialog.server.text())],
+                              lambda: dialog.token.clear())
+            attach(dialog, row)
             try:
-                if dialog.exec() != QDialog.DialogCode.Accepted:
+                accepted = dialog_hook(dialog) if dialog_hook else dialog.exec() == QDialog.DialogCode.Accepted
+                if not accepted:
                     return
                 server_url, api_key, mapping_rows, library_id = dialog.configuration()
                 library_name = dialog.library_name()
+                keep = row.checked
             finally:
                 # Sinon chaque dialogue fermé (et la clé saisie) reste en mémoire.
                 getattr(dialog, "deleteLater", lambda: None)()
             self._jellyfin_config = {"server": server_url, "key": api_key, "mappings": mapping_rows,
                                      "library_id": library_id, "library_name": library_name}
-            # La clé n'est jamais écrite sur disque.
+            # La clé ne va que dans le trousseau, et seulement si l'utilisateur l'a demandé.
+            message = remember(self, "jellyfin", {account("jellyfin", server_url): api_key}, keep)
+            if message:
+                self.service_log = (getattr(self, "service_log", []) + [message])[-20:]
             self.save_preferences(jellyfin={"server": server_url, "mappings": mapping_rows, "library_id": library_id,
                                             "library_name": library_name})
             mappings = [PathMapping(*row) for row in mapping_rows]
@@ -812,8 +831,8 @@ class AdvancedWindow(MainWindow):
                 return
             track = tracks[labels.index(label)]
         if api_key is None:
-            api_key, accepted = QInputDialog.getText(self, "AcoustID (facultatif)",
-                "Clé API AcoustID — laisser vide pour calculer uniquement l’empreinte locale", QLineEdit.EchoMode.Password)
+            from .keychain_gui import ask_acoustid_key
+            api_key, accepted = ask_acoustid_key(self)
             if not accepted:
                 return
         from .recognition import AcoustIDClient, Fingerprinter

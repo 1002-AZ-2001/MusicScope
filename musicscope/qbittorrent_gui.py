@@ -1,7 +1,8 @@
 """Connexion à qBittorrent : quels fichiers de la médiathèque sont partagés.
 
-Les secrets (mot de passe, clé API) restent en mémoire pour la session ; seuls l'adresse,
-l'identifiant et les correspondances de chemins sont enregistrés.
+Les secrets (mot de passe, clé API) restent en mémoire pour la session, sauf si l'utilisateur
+les mémorise dans le trousseau du système ; les préférences ne gardent que l'adresse,
+l'identifiant et les correspondances de chemins.
 """
 from __future__ import annotations
 
@@ -33,9 +34,9 @@ class QBittorrentDialog(QDialog):
         self.password = QLineEdit(previous.get("password", ""))
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Adresse de la WebUI", self.server)
-        form.addRow("Clé API (session seulement)", self.api_key)
+        form.addRow("Clé API", self.api_key)
         form.addRow("ou identifiant", self.username)
-        form.addRow("et mot de passe (session seulement)", self.password)
+        form.addRow("et mot de passe", self.password)
         layout.addLayout(form)
         layout.addWidget(QLabel("Correspondances : dossier vu par qBittorrent (souvent /downloads dans un conteneur) "
                                 "→ même dossier sur ce poste. Laissez vide si les chemins sont identiques."))
@@ -73,22 +74,48 @@ class QBittorrentDialog(QDialog):
                 "username": self.username.text().strip(), "password": self.password.text(), "mappings": rows}
 
 
-def connect_qbittorrent(window, config=None, client_factory=None):
+def secret_names(server: str, username: str) -> tuple[str, str]:
+    from .keychain import account
+    return account("qbittorrent-cle", server), account("qbittorrent", server, username or "-")
+
+
+def connect_qbittorrent(window, config=None, client_factory=None, dialog_hook=None):
     """Lit les torrents en tâche de fond et garde l'index pour la session."""
     if window.task is not None:
         return
     from .jellyfin import PathMapping
+    from .keychain import recall, remember
     from .qbittorrent import QBittorrentClient, QBittorrentUnavailable
     if config is None:
-        dialog = QBittorrentDialog(window.root, getattr(window, "_qbittorrent_config", None)
-                                   or window._preferences().get("qbittorrent") or {}, window)
+        from .keychain_gui import RememberRow, attach
+        previous = dict(getattr(window, "_qbittorrent_config", None) or window._preferences().get("qbittorrent") or {})
+        if previous.get("server") and not (previous.get("api_key") or previous.get("password")):
+            key_name, password_name = secret_names(previous["server"], previous.get("username", ""))
+            found = recall(window, "qbittorrent", [key_name, password_name])
+            previous.update(api_key=found.get(key_name, ""), password=found.get(password_name, ""))
+        dialog = QBittorrentDialog(window.root, previous, window)
+
+        def cleared():
+            dialog.api_key.clear()
+            dialog.password.clear()
+        row = RememberRow(window, "qbittorrent",
+                          lambda: list(secret_names(dialog.server.text(), dialog.username.text())), cleared)
+        attach(dialog, row)
         try:
-            if dialog.exec() != QDialog.DialogCode.Accepted:
+            accepted = dialog_hook(dialog) if dialog_hook else dialog.exec() == QDialog.DialogCode.Accepted
+            if not accepted:
                 return
             config = dialog.configuration()
+            config["remember"] = row.checked
         finally:
             dialog.deleteLater()
-    window._qbittorrent_config = config  # secrets en mémoire seulement
+    window._qbittorrent_config = config
+    if "remember" in config:
+        key_name, password_name = secret_names(config["server"], config.get("username", ""))
+        message = remember(window, "qbittorrent", {key_name: config.get("api_key", ""),
+                                                   password_name: config.get("password", "")}, bool(config["remember"]))
+        if message:
+            window.state.setText(message)
     window.save_preferences(qbittorrent={"server": config["server"], "username": config.get("username", ""),
                                          "mappings": config.get("mappings", [])})
     factory = client_factory or QBittorrentClient

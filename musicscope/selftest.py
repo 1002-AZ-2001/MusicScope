@@ -10,12 +10,13 @@ def self_test() -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QThread
     from PySide6.QtWidgets import QApplication
+
     from . import __version__
+    from .advanced_gui import AdvancedWindow
     from .cache import Cache
     from .comparison import IDENTICAL, MATCHING, compare_albums, exact_file_groups
     from .demo import create_demo
     from .scanner import scan
-    from .advanced_gui import AdvancedWindow
 
     with tempfile.TemporaryDirectory(prefix="musicscope-selftest-") as temporary:
         directory = Path(temporary)
@@ -29,6 +30,11 @@ def self_test() -> int:
             assert compare_albums(albums["Horizons FLAC"], albums["Copie noms différents"], cache, exact=True).status == IDENTICAL
             assert compare_albums(albums["Horizons FLAC"], albums["Horizons MP3"]).status == MATCHING
             assert exact_file_groups(inventory, cache), "Recherche SHA-256 non fonctionnelle"
+        # Trousseau : modules présents dans le paquet (aucune connexion ni lecture ici).
+        import cryptography.hazmat.primitives.ciphers  # noqa: F401
+        import jeepney  # noqa: F401
+        import secretstorage  # noqa: F401
+        from keyring.backends import SecretService  # noqa: F401
         app = QApplication.instance() or QApplication([])
         window = AdvancedWindow(directory / "gui-cache")
         window.root = str(root)
@@ -58,6 +64,7 @@ def self_test() -> int:
 def _tag_round_trip(directory: Path, root: Path) -> None:
     """Écriture puis annulation sur une copie : vérifie Mutagen et l'éditeur dans le binaire."""
     import shutil
+
     from .cache import Cache
     from .metadata import read_track
     from .scanner import scan
