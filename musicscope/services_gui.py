@@ -26,7 +26,7 @@ class LidarrDialog(QDialog):
         self.server.setPlaceholderText("http://truenas:8686")
         self.api_key = QLineEdit(previous.get("api_key", ""))
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.api_key.setPlaceholderText("Paramètres → Général → Sécurité → Clé API (session seulement)")
+        self.api_key.setPlaceholderText("Paramètres → Général → Sécurité → Clé API")
         form.addRow("Adresse de Lidarr", self.server)
         form.addRow("Clé API", self.api_key)
         layout.addLayout(form)
@@ -88,22 +88,60 @@ class LidarrDialog(QDialog):
         return True
 
 
-def configure_lidarr(window, config=None):
+def configure_lidarr(window, config=None, dialog_hook=None):
+    """`config` : réglages imposés (tests) ; `dialog_hook` reçoit le dialogue avant son affichage
+    et renvoie True pour le valider sans fenêtre modale (tests)."""
+    from .keychain import account, recall, remember
     if config is None:
-        dialog = LidarrDialog(window.root, getattr(window, "_lidarr_config", None)
-                              or window._preferences().get("lidarr") or {}, window,
-                              notify=window._preferences().get("notify_services", True))
+        from .keychain_gui import RememberRow, attach
+        previous = dict(getattr(window, "_lidarr_config", None) or window._preferences().get("lidarr") or {})
+        if not previous.get("api_key") and previous.get("server"):
+            name = account("lidarr", previous["server"])
+            previous["api_key"] = recall(window, "lidarr", [name]).get(name, "")
+        dialog = LidarrDialog(window.root, previous, window, notify=window._preferences().get("notify_services", True))
+        row = RememberRow(window, "lidarr", lambda: [account("lidarr", dialog.server.text())], dialog.api_key.clear)
+        attach(dialog, row)
         try:
             from PySide6.QtWidgets import QDialog as _Dialog
-            if dialog.exec() != _Dialog.DialogCode.Accepted:
+            accepted = dialog_hook(dialog) if dialog_hook else dialog.exec() == _Dialog.DialogCode.Accepted
+            if not accepted:
                 return
             config = dialog.configuration()
+            config["remember"] = row.checked
         finally:
             dialog.deleteLater()
-    window._lidarr_config = config  # clé en mémoire seulement
+    window._lidarr_config = config
+    message = ""
+    if "remember" in config:
+        message = remember(window, "lidarr", {account("lidarr", config["server"]): config.get("api_key", "")},
+                           bool(config["remember"]))
     window.save_preferences(lidarr={"server": config["server"], "mappings": config.get("mappings", [])},
                             notify_services=bool(config.get("notify", True)))
-    window.state.setText("Lidarr configuré pour cette session." if config.get("server") else "Lidarr désactivé.")
+    text = "Lidarr configuré." if config.get("server") else "Lidarr désactivé."
+    window.state.setText(f"{text} {message}".strip())
+
+
+def restore_remembered(window) -> list[str]:
+    """Au démarrage : Lidarr et Jellyfin prêts si leurs clés ont été mémorisées (trousseau ouvert
+    seulement dans ce cas). Renvoie les services rétablis."""
+    from .keychain import account, recall, remembered
+    restored = []
+    lidarr = window._preferences().get("lidarr")
+    if isinstance(lidarr, dict) and lidarr.get("server") and remembered(window, "lidarr"):
+        name = account("lidarr", lidarr["server"])
+        key = recall(window, "lidarr", [name]).get(name)
+        if key:
+            window._lidarr_config = {**lidarr, "api_key": key,
+                                     "notify": window._preferences().get("notify_services", True)}
+            restored.append("Lidarr")
+    jellyfin = window._preferences().get("jellyfin")
+    if isinstance(jellyfin, dict) and jellyfin.get("server") and remembered(window, "jellyfin"):
+        name = account("jellyfin", jellyfin["server"])
+        key = recall(window, "jellyfin", [name]).get(name)
+        if key:
+            window._jellyfin_config = {**jellyfin, "key": key}
+            restored.append("Jellyfin")
+    return restored
 
 
 def build_notifier(window, lidarr_factory=None, jellyfin_factory=None):

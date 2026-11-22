@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.18.1
+# Validation — MusicScope 0.19.0
+
+## Version 0.19.0 — Clés dans le trousseau du système
+
+Bibliothèque `keyring` 25.7.0 (MIT), avec SecretStorage 3.5.0 (BSD-3-Clause), jeepney 0.9.0 (MIT) et `cryptography` (module compilé, requis par SecretStorage) : environ 2 Mo de plus dans le paquet. Le moteur Secret Service est choisi directement, sans la découverte par points d'entrée de `keyring`, et sa disponibilité est vérifiée par la bibliothèque elle-même (service actif ou activable par D-Bus). Essai réel : vrai GNOME Keyring (`gnome-keyring-daemon --unlock --components=secrets` dans une session `dbus-run-session`) : écriture, lecture, entrée nommée et attribuée à « MusicScope », suppression. Paquet PyInstaller construit localement : modules du trousseau présents, auto-test réussi ; l'auto-test importe désormais ces modules, donc la CI le vérifie sur l'archive, le .deb et le paquet Arch. Tests (`tests/test_keychain.py`, faux trousseau) : noms d'entrée, erreurs du trousseau sans exception, désactivation par variable d'environnement, D-Bus absent expliqué ; Lidarr : case décochée par défaut, rien d'enregistré sans elle, clé mémorisée puis reprise au redémarrage (notifications prêtes), fenêtre préremplie, « Oublier » ; sans trousseau, case grisée et clé gardée en mémoire ; qBittorrent (mot de passe par adresse et identifiant, prérempli à la réouverture), Jellyfin, AcoustID ; champ vidé : ancienne valeur retirée ; aucune clé dans `preferences.json`. Non essayé : KeePassXC et KDE réels. **587 tests** passent sous Python 3.12 et 3.13.
+
 
 ## Version 0.18.1 — Attestations réessayées, image du NAS publiée
 
