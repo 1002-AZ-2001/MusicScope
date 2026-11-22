@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.18.0
+# Validation — MusicScope 0.18.1
+
+## Version 0.18.1 — Attestations réessayées, image du NAS publiée
+
+À la publication de la v0.18.0, `actions/attest@v4` a échoué deux fois (« InternalError: error fetching tlog entry - (404) Not Found ») : délai de 5 s de Rekor dans sigstore-js, problème connu en amont (sigstore-js PR 1709, fusionnée mais pas encore publiée ; même erreur dans mikro-orm PR 8556 et github/copilot-cli PR 5308, levée par une relance). Les paquets v0.18.0 ont bien été publiés et vérifiés (SHA-256, auto-test, `--check-update` « portable »), mais sans attestation, et l'image du NAS v0.18.0 n'a pas été publiée car son job dépendait de celui des paquets. Désormais l'attestation des paquets a son propre job, et chaque attestation est tentée trois fois (attente de 1 puis 2 minutes). Un échec final rend le run rouge sans bloquer l'image ; la mise à jour intégrée ne dépend pas des attestations. La v0.18.1 sert aussi de premier essai réel de mise à jour depuis une version publiée (0.18.0 vers 0.18.1).
+
 
 ## Version 0.18.0 — Mise à jour automatique
 

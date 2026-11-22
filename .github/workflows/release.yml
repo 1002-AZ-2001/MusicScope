@@ -121,9 +121,6 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-      id-token: write
-      attestations: write
-      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -143,8 +140,46 @@ jobs:
             # Le tag est créé sur le commit exact qui vient d'être construit et testé.
             gh release create "$TAG" release/*.tar.gz release/*.deb release/*.pkg.tar.zst release/SHA256SUMS --target "$GITHUB_SHA" --title "MusicScope $TAG — Debian et Arch Linux" --notes-file docs/distribution.md
           fi
-      - name: Attester la provenance des paquets (Sigstore)
-        # Vérifiable par chacun : gh attestation verify FICHIER -R 1002-AZ-2001/MusicScope
+
+  attest:
+    name: Attester la provenance des paquets
+    # Job à part : une panne de Sigstore (Rekor lent) rend le run rouge, sans bloquer l'image.
+    # Vérifiable par chacun : gh attestation verify FICHIER -R 1002-AZ-2001/MusicScope
+    if: needs.version.outputs.release == 'true'
+    needs: [version, publish]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries-linux
+          path: release
+      - name: Attester les paquets (Sigstore) (essai 1/3)
+        id: ap1
+        continue-on-error: true
+        uses: actions/attest@v4
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Attendre avant l'essai 2 (60 s, Rekor lent)
+        if: steps.ap1.outcome == 'failure'
+        run: sleep 60
+      - name: Attester les paquets (Sigstore) (essai 2/3)
+        id: ap2
+        if: steps.ap1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/attest@v4
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Attendre avant l'essai 3 (120 s, Rekor lent)
+        if: steps.ap2.outcome == 'failure'
+        run: sleep 120
+      - name: Attester les paquets (Sigstore) (essai 3/3)
+        id: ap3
+        if: steps.ap2.outcome == 'failure'
         uses: actions/attest@v4
         with:
           subject-checksums: release/SHA256SUMS
@@ -200,7 +235,33 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.version.outputs.tag }}
             org.opencontainers.image.description=MusicScope : travail du NAS (tags, SHA-256, spectre) en lecture seule
-      - name: Attester la provenance de l'image (Sigstore)
+      # Après la publication : une panne de Sigstore rend le run rouge, sans retirer l'image.
+      - name: Attester la provenance de l'image (Sigstore) (essai 1/3)
+        id: ai1
+        continue-on-error: true
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.name.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Attendre avant l'essai 2 (60 s, Rekor lent)
+        if: steps.ai1.outcome == 'failure'
+        run: sleep 60
+      - name: Attester la provenance de l'image (Sigstore) (essai 2/3)
+        id: ai2
+        if: steps.ai1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.name.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Attendre avant l'essai 3 (120 s, Rekor lent)
+        if: steps.ai2.outcome == 'failure'
+        run: sleep 120
+      - name: Attester la provenance de l'image (Sigstore) (essai 3/3)
+        id: ai3
+        if: steps.ai2.outcome == 'failure'
         uses: actions/attest@v4
         with:
           subject-name: ${{ steps.name.outputs.image }}

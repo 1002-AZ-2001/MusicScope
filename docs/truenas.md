@@ -30,7 +30,7 @@ L'image est publiée par le workflow de publication à chaque version :
 `ghcr.io/1002-az-2001/musicscope:vX.Y.Z` et `:latest`. Préférez un numéro de version
 précis : la mise à jour reste alors une décision.
 
-L'image est publique : TrueNAS la télécharge sans compte GitHub. Chaque image publiée porte
+L'image est publique : TrueNAS la télécharge sans compte GitHub. À partir de la v0.18.1, chaque image porte
 une attestation de provenance (Sigstore), vérifiable avec
 `gh attestation verify oci://ghcr.io/1002-az-2001/musicscope:vX.Y.Z -R 1002-AZ-2001/MusicScope`.
 
@@ -42,7 +42,7 @@ Collez le texte ci-dessous en adaptant les deux chemins de gauche :
 ```yaml
 services:
   musicscope:
-    image: ghcr.io/1002-az-2001/musicscope:v0.17.0
+    image: ghcr.io/1002-az-2001/musicscope:v0.18.1
     user: "568:568"
     network_mode: none
     read_only: true
@@ -90,7 +90,7 @@ Le conteneur ne se met pas à jour lui-même (il n'a pas de réseau). Quand l'im
 « export produit par MusicScope X : mettez à jour l'image du NAS », ou après une nouvelle
 version de l'interface :
 
-- **Version précise (recommandé)** : Apps → musicscope → Edit, remplacez `v0.17.0` par le
+- **Version précise (recommandé)** : Apps → musicscope → Edit, remplacez `v0.18.1` par le
   nouveau numéro dans la ligne `image:`, puis cliquez sur **Update** en bas de l'écran.
 - **Étiquette `:latest`** : TrueNAS surveille les images en amont et affiche « Update
   available » sur la ligne de l'application ; menu ⋮ de l'encadré Application Info →
@@ -104,7 +104,7 @@ Les caches de `/data/cache` sont conservés : le passage suivant reste rapide.
 La même commande fonctionne sur toute machine qui voit la médiathèque en local :
 
 ```bash
-docker run --rm --network none --read-only --tmpfs /tmp -u 568:568 -v /chemin/Musique:/music:ro -v /chemin/musicscope:/data ghcr.io/1002-az-2001/musicscope:v0.17.0
+docker run --rm --network none --read-only --tmpfs /tmp -u 568:568 -v /chemin/Musique:/music:ro -v /chemin/musicscope:/data ghcr.io/1002-az-2001/musicscope:v0.18.1
 ```
 
 Ou, avec MusicScope installé : `musicscope --nas-work /chemin/Musique --out /chemin/musicscope`.
