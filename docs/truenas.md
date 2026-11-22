@@ -30,14 +30,9 @@ L'image est publiée par le workflow de publication à chaque version :
 `ghcr.io/1002-az-2001/musicscope:vX.Y.Z` et `:latest`. Préférez un numéro de version
 précis : la mise à jour reste alors une décision.
 
-Un paquet GHCR publié pour la première fois est **privé** par défaut. Deux possibilités :
-
-- Le rendre public : sur GitHub, page du paquet → Package settings → Danger Zone →
-  Change visibility. **Ce choix est définitif** : un paquet public ne peut plus redevenir
-  privé. Le dépôt étant public, l'image ne contient rien de plus que le code publié.
-- Le garder privé : TrueNAS doit alors s'identifier auprès de `ghcr.io` avec un jeton
-  GitHub (droit `read:packages`). L'emplacement de ce réglage varie selon la version de
-  TrueNAS ; consultez sa documentation.
+L'image est publique : TrueNAS la télécharge sans compte GitHub. Chaque image publiée porte
+une attestation de provenance (Sigstore), vérifiable avec
+`gh attestation verify oci://ghcr.io/1002-az-2001/musicscope:vX.Y.Z -R 1002-AZ-2001/MusicScope`.
 
 ## 3. Installer l'application
 
@@ -81,13 +76,28 @@ inchangés.
 
 1. Montez la médiathèque en SMB et choisissez comme racine **le même dossier** que
    celui monté en `/music`.
-2. Menu Sources → **Importer le travail du NAS (tags, SHA-256, spectre)…**
+2. Menu Services → **Importer le travail du NAS (tags, SHA-256, spectre)…**
 3. Choisissez `musicscope-nas.json.gz` dans le partage du dataset de résultat.
 
 Un fichier n'est repris que si sa taille est identique et sa date de modification égale à
 la microseconde près (SMB transmet les dates par pas de 100 ns). Sinon il est relu par le
 scan qui suit l'import. Le bilan (pistes, SHA-256 et spectres repris, fichiers modifiés ou
 absents) s'affiche dans la barre d'état et le journal.
+
+## Mettre à jour l'image
+
+Le conteneur ne se met pas à jour lui-même (il n'a pas de réseau). Quand l'import signale
+« export produit par MusicScope X : mettez à jour l'image du NAS », ou après une nouvelle
+version de l'interface :
+
+- **Version précise (recommandé)** : Apps → musicscope → Edit, remplacez `v0.17.0` par le
+  nouveau numéro dans la ligne `image:`, puis cliquez sur **Update** en bas de l'écran.
+- **Étiquette `:latest`** : TrueNAS surveille les images en amont et affiche « Update
+  available » sur la ligne de l'application ; menu ⋮ de l'encadré Application Info →
+  **Update**. Ajoutez `pull_policy: always` sous `musicscope:` pour que chaque redémarrage
+  récupère la dernière image.
+
+Les caches de `/data/cache` sont conservés : le passage suivant reste rapide.
 
 ## Sans TrueNAS
 
