@@ -290,6 +290,7 @@ def _proposals(album: Album, release: dict, candidate: ReleaseCandidate) -> list
             "musicbrainz_albumartistid": _artist_ids(release.get("artist-credit")),
             "title": _title(reference), "tracknumber": str(number), "discnumber": str(disc),
             "musicbrainz_trackid": recording.get("id", ""),
+            "musicbrainz_releasetrackid": reference.get("id", "") if isinstance(reference.get("id"), str) else "",
             "musicbrainz_artistid": _artist_ids(artist_credit), "artist": _credit(artist_credit),
         }
         for key, value in values.items():

@@ -354,6 +354,8 @@ class AdvancedWindow(MainWindow):
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
         self._action(sources, "Rechercher les alias de l’artiste…", self.resolve_alias)
+        self._action(sources, "MusicBrainz : identifier plusieurs albums (identifiants seulement)…",
+                     self.musicbrainz_batch)
         review = self.add_menu("Revue")
         self._action(review, "Enregistrer une décision pour deux albums…", self.record_decision)
         self._action(review, "Actualiser les décisions enregistrées", self.refresh_decisions)
@@ -398,6 +400,7 @@ class AdvancedWindow(MainWindow):
             ("Prévisualiser le rangement…", self.preview_organization, len(selected) == 1),
             ("Modifier les tags…", self.edit_tags, len(selected) == 1),
             ("Modifier les tags de ces albums…", self.edit_tags_batch, len(selected) >= 2),
+            ("Identifier ces albums sur MusicBrainz…", self.musicbrainz_batch, len(selected) >= 2),
             ("Voir les albums en double", lambda: self.tabs.setCurrentIndex(self.duplicates_index), True),
         ]
         return actions
@@ -1079,6 +1082,79 @@ class AdvancedWindow(MainWindow):
             self._start_after_task(lambda: self._write_batch(edits, label, len(albums), confirm))
 
         self.run_task(f"Préparation de la modification de {len(albums)} albums…", operation, planned)
+
+    def musicbrainz_batch(self, albums=None, chosen=None, confirm=None, client_factory=None):
+        """Identifie plusieurs albums et n'en écrit que les identifiants MusicBrainz. `albums`,
+        `chosen` (chemins), `confirm` et `client_factory` servent aux tests."""
+        if not self._fresh() or self.task is not None or self.inventory is None:
+            return
+        from .mb_batch import estimate, verify_albums
+        from .mb_batch_gui import duration_text
+        from .musicbrainz import MusicBrainzClient
+        if albums is None:
+            albums = self.selected_albums()
+            if len(albums) < 2:
+                albums = list(self.inventory.albums)
+                usual, worst = estimate(albums)
+                answer = QMessageBox.question(
+                    self, "MusicBrainz : toute la bibliothèque",
+                    f"Moins de deux albums sélectionnés : identifier les {len(albums)} albums de la bibliothèque ?\n\n"
+                    f"MusicBrainz accepte une requête par seconde : environ {duration_text(usual)}, au plus "
+                    f"{duration_text(worst)} (moins si des réponses sont en cache). Annulable à tout moment ; "
+                    "rien n’est écrit sans votre confirmation.")
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+        if not albums:
+            return
+        factory = client_factory or MusicBrainzClient
+        cache = self.cache_dir / "musicbrainz.sqlite3"
+
+        def operation(cancel, progress):
+            client = factory(cache)
+            try:
+                return verify_albums(albums, client, cancel, progress)
+            finally:
+                client.close()
+
+        def done(results):
+            for result in results:
+                self.verifications[result.album.path] = result.verification  # reprises par l'éditeur de tags
+            writable = [result for result in results if result.writable]
+            self.state.setText(f"MusicBrainz : {len(writable)} album(s) sur {len(results)} avec une seule "
+                               "édition cohérente.")
+            self._start_after_task(lambda: self._musicbrainz_batch_review(results, chosen, confirm))
+
+        self.run_task(f"Identification MusicBrainz de {len(albums)} albums (une requête par seconde)…",
+                      operation, done, cancellable=True)
+
+    def _musicbrainz_batch_review(self, results, chosen, confirm):
+        from .mb_batch import identifier_edits
+        from .tag_editor_gui import read_live_values
+        from .tagwriter import batch_label
+        if chosen is None:
+            from .mb_batch_gui import MusicBrainzBatchDialog
+            dialog = MusicBrainzBatchDialog(results, self)
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                chosen = dialog.chosen()
+            finally:
+                dialog.deleteLater()
+        selected = [result for result in results if result.writable and result.album.path in chosen]
+        if not selected:
+            self.state.setText("Aucun album coché : aucun identifiant écrit.")
+            return
+
+        def operation(cancel, progress):
+            return identifier_edits(selected, None, read_live_values)
+
+        def planned(edits):
+            if not edits:
+                self.state.setText("Identifiants MusicBrainz déjà à jour : rien à écrire.")
+                return
+            label = batch_label([result.album for result in selected])
+            self._start_after_task(lambda: self._write_batch(edits, label, len(selected), confirm))
+        self.run_task("Lecture des tags actuels avant l’écriture des identifiants…", operation, planned)
 
     def _write_batch(self, edits, label, album_count, confirm):
         from .tag_editor_gui import TagPreviewDialog

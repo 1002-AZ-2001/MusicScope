@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.20.0
+# Validation — MusicScope 0.21.0
+
+## Version 0.21.0 — MusicBrainz en lot, identifiants seulement
+
+Règle de MusicBrainz : une requête par seconde au plus et un User-Agent identifiant l'application (pages « MusicBrainz API » et « Rate Limiting » de musicbrainz.org), déjà respectées par le client partagé (limiteur unique, cache SQLite de sept jours). Chaque album passe par `verify_album` ; seule l'issue « Édition probable » (une seule édition cohérente, recherche non tronquée) donne des valeurs, limitées aux champs `musicbrainz_*`. L'identifiant de piste d'édition (`MUSICBRAINZ_RELEASETRACKID`, convention de Picard) est désormais proposé. Tests (`tests/test_mb_batch.py`) : seuls les identifiants sont retenus, jamais rien pour un album incertain ; estimation (six requêtes sans MBID, une avec, sept au pire) ; annulation entre deux albums ; aucun titre ni date écrit ; vrai client avec réponse MusicBrainz simulée : identifiant de piste d'édition proposé, une seule requête ; tableau des résultats (seuls les albums sûrs cochés et cochables) ; depuis la fenêtre, vérifications gardées pour l'éditeur, identifiants écrits sur l'album sûr en un seul lot, album incertain inchangé. Non essayé : le vrai service MusicBrainz sur votre bibliothèque. **606 tests** passent sous Python 3.12 et 3.13.
+
 
 ## Version 0.20.0 — Tags de plusieurs albums
 
