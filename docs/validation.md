@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.19.0
+# Validation — MusicScope 0.20.0
+
+## Version 0.20.0 — Tags de plusieurs albums
+
+Chaque album passe par la même planification que l'éditeur d'un album (`plan_album_edits`) : mêmes conversions (compilation, valeurs multiples), mêmes champs ignorés selon le format, mêmes vérifications à l'écriture. Tests (`tests/test_batch_tags.py`, vrais fichiers FLAC) : valeur commune, champ vidé (ancienne valeur gardée pour l'annulation), compilation, rechercher / remplacer sur chaque piste ; fichiers déjà conformes et texte absent laissés tels quels ; remplacement littéral (« a.b », barres obliques inverses) et majuscules ; demandes contradictoires refusées avant toute lecture (champ rempli et vidé, champ hors liste, recherche vide, valeur et remplacement sur le même champ) ; dossier commun affiché dans le journal ; dialogue (Vider grise le champ, compilation « Non », remplacement) ; depuis la fenêtre, sélection d'un seul album refusée, quatre fichiers de deux albums écrits en une seule entrée du journal puis rétablis par une seule annulation ; fichier lié physiquement exclu du lot. **599 tests** passent sous Python 3.12 et 3.13.
+
 
 ## Version 0.19.0 — Clés dans le trousseau du système
 

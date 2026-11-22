@@ -144,6 +144,71 @@ def plan_album_edits(album: Album, album_values: dict[str, str],
     return edits
 
 
+BATCH_FIELDS = ("genre", "date", "compilation", "albumartist", "artist", "composer", "comment")
+REPLACE_FIELDS = ("title", "artist", "albumartist", "album", "genre", "composer", "comment", "performer",
+                  "conductor")
+
+
+@dataclass(frozen=True)
+class Replacement:
+    field: str
+    search: str
+    replace: str
+    case_sensitive: bool = False
+
+    def apply(self, text: str) -> str:
+        if self.case_sensitive:
+            return text.replace(self.search, self.replace)
+        return re.sub(re.escape(self.search), lambda match: self.replace, text, flags=re.IGNORECASE)
+
+
+def plan_batch_edits(albums, values: dict[str, str], clear=(), replacement: Replacement | None = None,
+                     live_values=None, cancel=None) -> list[FileEdit]:
+    """Même modification sur plusieurs albums : `values` écrit, `clear` vide, `replacement`
+    remplace un texte là où il apparaît. Un champ laissé de côté n'est jamais modifié.
+    `live_values(album)` lit les champs que le scan ne relève pas (compositeur, commentaire…)."""
+    clear = set(clear)
+    for key in (*values, *clear):
+        if key not in BATCH_FIELDS:
+            raise ValueError(f"Champ non modifiable sur plusieurs albums : {key}")
+    if clear & set(values):
+        raise ValueError("Un même champ ne peut pas être à la fois rempli et vidé.")
+    if replacement is not None:
+        if replacement.field not in REPLACE_FIELDS:
+            raise ValueError(f"Rechercher / remplacer impossible dans : {replacement.field}")
+        if not replacement.search:
+            raise ValueError("Indiquez le texte à rechercher.")
+        if replacement.field in values or replacement.field in clear:
+            raise ValueError(f"{FIELD_LABELS[replacement.field]} : choisissez soit une valeur, soit un remplacement.")
+    album_values = {**values, **dict.fromkeys(clear, "")}
+    edits = []
+    for album in albums:
+        if cancel is not None and cancel.is_set():
+            from .cache import ScanCancelled
+            raise ScanCancelled()
+        live = live_values(album) if live_values else {}
+        track_values = {}
+        if replacement is not None:
+            for track in album.ordered_tracks:
+                before = live.get(track.path, {}).get(replacement.field, track.value(replacement.field))
+                after = replacement.apply(before)
+                if after != before:
+                    track_values[track.path] = {replacement.field: after}
+        edits.extend(plan_album_edits(album, album_values, track_values, live))
+    return edits
+
+
+def batch_label(albums) -> str:
+    """Dossier commun des albums, affiché dans le journal des tags."""
+    paths = [album.path for album in albums]
+    if len(paths) == 1:
+        return paths[0]
+    try:
+        return os.path.commonpath(paths)
+    except ValueError:  # volumes différents (Windows)
+        return f"{len(paths)} albums"
+
+
 def cover_file_edit(album: Album, image_ref: str | None) -> FileEdit:
     """Modification du fichier de pochette du dossier (cover.jpg ou cover.png) ; None le retire."""
     folder = Path(album.path)

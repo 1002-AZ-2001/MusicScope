@@ -371,6 +371,8 @@ class AdvancedWindow(MainWindow):
         tags = self.add_menu("Tags")
         edit_action = self._action(tags, "Modifier les tags de l’album sélectionné…", self.edit_tags)
         edit_action.setShortcut("Ctrl+T")
+        batch_action = self._action(tags, "Modifier les tags de plusieurs albums…", self.edit_tags_batch)
+        batch_action.setShortcut("Ctrl+Shift+T")
         self._action(tags, "Annuler la modification sélectionnée…", self.undo_tags)
         self._action(tags, "Afficher le journal des tags", lambda: self.tabs.setCurrentIndex(self.tags_index))
         organize = self.add_menu("Rangement")
@@ -395,6 +397,7 @@ class AdvancedWindow(MainWindow):
             ("Alias de l’artiste…", self.resolve_alias, len(selected) == 1),
             ("Prévisualiser le rangement…", self.preview_organization, len(selected) == 1),
             ("Modifier les tags…", self.edit_tags, len(selected) == 1),
+            ("Modifier les tags de ces albums…", self.edit_tags_batch, len(selected) >= 2),
             ("Voir les albums en double", lambda: self.tabs.setCurrentIndex(self.duplicates_index), True),
         ]
         return actions
@@ -994,16 +997,9 @@ class AdvancedWindow(MainWindow):
         if not edits:
             self.state.setText("Aucune différence avec les tags actuels : rien à écrire.")
             return
-        from .tagwriter import linked_paths
-        linked = set(linked_paths(edits))
-        if self.seed_index is not None:  # fichier d'un torrent sans lien physique (dossier de téléchargement)
-            linked |= {edit.path for edit in edits if self.seed_index.protected(edit.path, edit.size)}
-        if linked:
-            edits = [edit for edit in edits if edit.path not in linked]
-            if not edits:
-                self.show_error(f"Écriture refusée : les {len(linked)} fichier(s) concernés sont liés physiquement "
-                                "(qBittorrent, Lidarr). Modifier leurs tags modifierait aussi la copie partagée.")
-                return
+        edits, linked = self._without_protected(edits)
+        if not edits:
+            return
         if confirm is None:
             preview = TagPreviewDialog(edits, self, linked=len(linked))
             accepted = preview.exec() == QDialog.DialogCode.Accepted
@@ -1021,6 +1017,90 @@ class AdvancedWindow(MainWindow):
             self._tags_written(result, "écrits")
         self.run_task(f"Écriture des tags de {len(edits)} fichier(s), avec vérification par relecture…",
                       operation, done, cancellable=True)
+
+    def _without_protected(self, edits):
+        """Retire les fichiers liés physiquement ou partagés par qBittorrent ; renvoie (reste, exclus)."""
+        from .tagwriter import linked_paths
+        linked = set(linked_paths(edits))
+        if self.seed_index is not None:  # fichier d'un torrent sans lien physique (dossier de téléchargement)
+            linked |= {edit.path for edit in edits if self.seed_index.protected(edit.path, edit.size)}
+        kept = [edit for edit in edits if edit.path not in linked]
+        if linked and not kept:
+            self.show_error(f"Écriture refusée : les {len(linked)} fichier(s) concernés sont liés physiquement "
+                            "(qBittorrent, Lidarr). Modifier leurs tags modifierait aussi la copie partagée.")
+        return kept, len(linked)
+
+    def edit_tags_batch(self, request=None, confirm=None):
+        """Même modification sur plusieurs albums. `request` (valeurs, champs à vider, remplacement)
+        et `confirm` servent aux tests ; sinon les dialogues les fournissent."""
+        if not self._fresh() or self.task is not None:
+            return
+        albums = self.selected_albums()
+        if len(albums) < 2:
+            self.state.setText("Sélectionnez au moins deux albums (Ctrl ou Maj + clic), puis réessayez. "
+                               "Pour un seul album : Tags → Modifier les tags de l’album sélectionné.")
+            self.tabs.setCurrentIndex(0)
+            return
+        from .tag_editor_gui import read_live_values
+        from .tagwriter import batch_label, plan_batch_edits
+        if request is None:
+            from .batch_tags_gui import BatchTagDialog
+            dialog = BatchTagDialog(albums, self)
+            try:
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                request = dialog.request()
+            finally:
+                dialog.deleteLater()
+        values, clear, replacement = request
+        if not values and not clear and replacement is None:
+            self.state.setText("Aucun champ rempli, vidé ou remplacé : rien à modifier.")
+            return
+        try:  # erreurs de saisie signalées avant toute lecture des fichiers
+            plan_batch_edits([], values, clear, replacement)
+        except ValueError as exc:
+            self.show_error(f"Modification refusée : {exc}")
+            return
+        label = batch_label(albums)
+
+        positions = {id(album): position for position, album in enumerate(albums, 1)}
+
+        def operation(cancel, progress):
+            def live(album):
+                if progress:
+                    progress(positions[id(album)], len(albums), f"Lecture des tags : {album.path}")
+                return read_live_values(album)
+            return plan_batch_edits(albums, values, clear, replacement, live, cancel)
+
+        def planned(edits):
+            if not edits:
+                self.state.setText("Aucune différence avec les tags actuels : rien à écrire.")
+                return
+            self._start_after_task(lambda: self._write_batch(edits, label, len(albums), confirm))
+
+        self.run_task(f"Préparation de la modification de {len(albums)} albums…", operation, planned)
+
+    def _write_batch(self, edits, label, album_count, confirm):
+        from .tag_editor_gui import TagPreviewDialog
+        from .tagwriter import TagJournal
+        edits, linked = self._without_protected(edits)
+        if not edits:
+            return
+        if confirm is None:
+            preview = TagPreviewDialog(edits, self, linked=linked)
+            preview.setWindowTitle(f"Aperçu : {album_count} albums, {len(edits)} fichier(s)")
+            accepted = preview.exec() == QDialog.DialogCode.Accepted
+            preview.deleteLater()
+            if not accepted:
+                return
+        elif not confirm:
+            return
+
+        def operation(cancel, progress):
+            with TagJournal(self.cache_dir / "tags.sqlite3") as journal:
+                return journal.apply(edits, label, cancel=cancel, progress=progress)
+        self.run_task(f"Écriture des tags de {len(edits)} fichier(s) dans {album_count} albums, avec vérification…",
+                      operation, lambda result: self._tags_written(result, "écrits"), cancellable=True)
 
     def _tags_written(self, result, verb):
         self.refresh_tag_journal(select=result.batch_id)
