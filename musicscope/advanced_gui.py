@@ -350,6 +350,12 @@ class AdvancedWindow(MainWindow):
         self._action(sources, "qBittorrent : lire les torrents et protéger leurs fichiers…", self.connect_qbittorrent)
         self._action(sources, "Lidarr : relire les dossiers modifiés (et prévenir Jellyfin)…", self.configure_lidarr)
         self._action(sources, "Importer le travail du NAS (tags, SHA-256, spectre)…", self.import_nas_work)
+        self.auto_nas_action = QAction("Importer automatiquement le travail du NAS au démarrage", self)
+        self.auto_nas_action.setCheckable(True)
+        saved_nas = self._preferences().get("nas_work")
+        self.auto_nas_action.setChecked(not isinstance(saved_nas, dict) or saved_nas.get("auto", True) is not False)
+        self.auto_nas_action.toggled.connect(self.set_auto_import_nas)
+        sources.addAction(self.auto_nas_action)
         sources.addSeparator()
         self._action(sources, "Empreinte Chromaprint et recherche AcoustID…", self.start_recognition)
         self._action(sources, "Consulter ou comparer les pochettes…", self.fetch_artworks)
@@ -375,6 +381,7 @@ class AdvancedWindow(MainWindow):
         edit_action.setShortcut("Ctrl+T")
         batch_action = self._action(tags, "Modifier les tags de plusieurs albums…", self.edit_tags_batch)
         batch_action.setShortcut("Ctrl+Shift+T")
+        self._action(tags, "Calculer le ReplayGain (volume homogène)…", self.compute_replaygain)
         self._action(tags, "Annuler la modification sélectionnée…", self.undo_tags)
         self._action(tags, "Afficher le journal des tags", lambda: self.tabs.setCurrentIndex(self.tags_index))
         organize = self.add_menu("Rangement")
@@ -401,6 +408,7 @@ class AdvancedWindow(MainWindow):
             ("Modifier les tags…", self.edit_tags, len(selected) == 1),
             ("Modifier les tags de ces albums…", self.edit_tags_batch, len(selected) >= 2),
             ("Identifier ces albums sur MusicBrainz…", self.musicbrainz_batch, len(selected) >= 2),
+            ("Calculer le ReplayGain…", self.compute_replaygain, len(selected) >= 1),
             ("Voir les albums en double", lambda: self.tabs.setCurrentIndex(self.duplicates_index), True),
         ]
         return actions
@@ -497,7 +505,7 @@ class AdvancedWindow(MainWindow):
 
         self.run_task("Analyse du spectre des FLAC…", operation, done)
 
-    def import_nas_work(self, path=None):
+    def import_nas_work(self, path=None, automatic=False):
         """Reprend les lectures faites par le conteneur du NAS, puis relance un scan (rapide :
         seuls les fichiers modifiés depuis son passage sont relus)."""
         if self.task is not None:
@@ -531,8 +539,18 @@ class AdvancedWindow(MainWindow):
             if is_newer(musicscope_version, report.app_version):
                 text += (f" ; export produit par MusicScope {report.app_version} : mettez à jour l’image du NAS "
                          "(docs/truenas.md)")
+            if automatic:
+                text = "Import automatique — " + text
             self.service_log = (getattr(self, "service_log", []) + [text])[-20:]
             self.state.setText(text + ". Actualisation…")
+            try:  # fichier retenu : il sera réimporté au démarrage s'il change
+                info = Path(path).stat()
+                saved = dict(self._preferences().get("nas_work") or {})
+                saved.update(path=str(path), size=info.st_size, mtime_ns=info.st_mtime_ns)
+                saved.setdefault("auto", True)
+                self.save_preferences(nas_work=saved)
+            except OSError:
+                pass
             self._start_after_task(self.start_scan)
 
         self.run_task("Import du travail du NAS…", operation, done)
@@ -1155,6 +1173,84 @@ class AdvancedWindow(MainWindow):
             label = batch_label([result.album for result in selected])
             self._start_after_task(lambda: self._write_batch(edits, label, len(selected), confirm))
         self.run_task("Lecture des tags actuels avant l’écriture des identifiants…", operation, planned)
+
+    def compute_replaygain(self, albums=None, confirm=None, ffmpeg=None, ask=None):
+        """ReplayGain 2.0 des albums sélectionnés, ou de ceux qui n'en ont pas. `albums`,
+        `confirm`, `ffmpeg` et `ask` (réponse à la question « toute la bibliothèque ») servent aux tests."""
+        if not self._fresh() or self.task is not None or self.inventory is None:
+            return
+        from .replaygain import ReplayGainUnavailable, missing_replaygain, plan_album
+        from .spectrum import SpectrumUnavailable, _find_ffmpeg
+        from .tag_editor_gui import read_live_values
+        from .tagwriter import batch_label, plan_album_edits
+        try:
+            ffmpeg = ffmpeg or _find_ffmpeg()
+        except SpectrumUnavailable:
+            self.show_error("FFmpeg est introuvable : installez-le (paquet « ffmpeg ») pour calculer le ReplayGain.")
+            return
+        only_missing = False
+        if albums is None:
+            albums = self.selected_albums()
+            if not albums:
+                albums, only_missing = list(self.inventory.albums), True
+                tracks = sum(len(album.tracks) for album in albums)
+                if ask is None:
+                    ask = QMessageBox.question(
+                        self, "ReplayGain : albums sans ReplayGain",
+                        f"Aucun album sélectionné : calculer le ReplayGain des albums qui n’en ont pas, parmi les "
+                        f"{len(albums)} albums ({tracks} pistes) ?\n\nChaque piste est décodée en entier : comptez "
+                        "environ 1 à 3 s par piste en local, davantage sur un partage réseau. Annulable à tout "
+                        "moment ; un aperçu précède l’écriture.") == QMessageBox.StandardButton.Yes
+                if not ask:
+                    return
+        if not albums:
+            return
+
+        def operation(cancel, progress):
+            chosen = [album for album in albums if missing_replaygain(album)] if only_missing else albums
+            edits, errors = [], []
+            for position, album in enumerate(chosen, 1):
+                progress(position, len(chosen), f"ReplayGain : {album.path}")
+                try:
+                    values = plan_album(album, ffmpeg, cancel)
+                    edits.extend(plan_album_edits(album, {}, values, read_live_values(album)))
+                except (ReplayGainUnavailable, OSError, ValueError) as exc:
+                    errors.append(f"{album.path} : {exc}")
+            return chosen, edits, errors
+
+        def measured(result):
+            chosen, edits, errors = result
+            for error in errors:
+                self.show_error(f"ReplayGain non calculé : {error}")
+            if not edits:
+                self.state.setText(f"ReplayGain : rien à écrire ({len(chosen)} album(s) examiné(s)"
+                                   + (f", {len(errors)} en échec" if errors else "") + ").")
+                return
+            self._start_after_task(lambda: self._write_batch(edits, batch_label(chosen), len(chosen), confirm))
+
+        self.run_task(f"Mesure du volume (ReplayGain) de {len(albums)} album(s)…", operation, measured,
+                      cancellable=True)
+
+    def auto_import_nas(self) -> bool:
+        """Au démarrage : importe le travail du NAS s'il a changé depuis le dernier import."""
+        saved = self._preferences().get("nas_work")
+        if not isinstance(saved, dict) or not saved.get("auto", True) or not saved.get("path"):
+            return False
+        if not self.root or self.task is not None:
+            return False
+        try:
+            info = Path(saved["path"]).stat()
+        except OSError:
+            return False  # partage non monté : rien à signaler au démarrage
+        if [info.st_size, info.st_mtime_ns] == [saved.get("size"), saved.get("mtime_ns")]:
+            return False
+        self.import_nas_work(saved["path"], automatic=True)
+        return True
+
+    def set_auto_import_nas(self, enabled: bool):
+        saved = dict(self._preferences().get("nas_work") or {})
+        saved["auto"] = bool(enabled)
+        self.save_preferences(nas_work=saved)
 
     def _write_batch(self, edits, label, album_count, confirm):
         from .tag_editor_gui import TagPreviewDialog

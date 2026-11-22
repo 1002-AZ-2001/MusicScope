@@ -90,6 +90,8 @@ def main() -> int:
         app.setOrganizationName("MusicScope")
         window = MainWindow(args.cache)
         window.show()
+        from PySide6.QtCore import QTimer as _Timer
+        _Timer.singleShot(1500, window.auto_import_nas)  # travail du NAS plus récent : importé seul
         if not os.environ.get("MUSICSCOPE_NO_UPDATE_CHECK"):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(4000, window.updater.check_on_startup)  # après l'affichage, sans le ralentir
