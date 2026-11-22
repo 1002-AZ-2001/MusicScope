@@ -93,6 +93,5 @@ Les appels HTTP sont simulés dans les tests ; le serveur Jellyfin privé et les
 - Distribution signée Windows et installateurs intégrés après essais sur vos postes.
 - Mesure sur votre NAS réel avec `scripts/benchmark_scan.py --workers 1` puis `--workers 8`, pour ajuster le nombre de threads.
 - Recherche exacte SHA-256 parallèle sur partage réseau, sur le même modèle que le scan.
-- Modification d'un champ sur plusieurs albums à la fois, avec le même aperçu et le même journal.
 - Écriture des identifiants MusicBrainz proposés.
 - Transfert entre volumes avec copie vérifiée et journal multiétape, dans un chantier distinct.
