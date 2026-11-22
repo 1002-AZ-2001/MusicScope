@@ -50,6 +50,7 @@ class ImportReport:
     changed: int = 0
     root: str = ""
     created_at: str = ""
+    app_version: str = ""
 
 
 def _relative(path: str, root: Path) -> str:
@@ -154,7 +155,8 @@ def import_work(path: str | Path, local_root: str | Path, cache: Cache, spectrum
     """Reprend dans le cache local les lectures faites sur le NAS, pour les fichiers inchangés."""
     data = read_work(path)
     local_root = Path(local_root).absolute()
-    report = ImportReport(root=str(data.get("root", "")), created_at=str(data.get("created_at", "")))
+    report = ImportReport(root=str(data.get("root", "")), created_at=str(data.get("created_at", "")),
+                          app_version=str(data.get("app_version", "")))
     matched: dict[str, os.stat_result] = {}
     entries = data["tracks"]
     with cache.deferred_commits():

@@ -69,6 +69,10 @@ jobs:
         run: uv run --no-sync python scripts/build_release.py
       - name: Vérifier aussi le démarrage graphique X11
         run: xvfb-run -a env QT_QPA_PLATFORM=xcb dist/MusicScope/MusicScope --self-test
+      - name: Mise à jour reconnue pour l'archive portable
+        run: |
+          { dist/MusicScope/MusicScope --check-update || true; } | tee check.txt
+          grep -q "Installation : portable" check.txt
       - name: Construire le paquet Arch avec makepkg non-root
         run: |
           docker run --rm -v "$PWD/build/arch:/build" -w /build archlinux:base-devel bash -euc '
@@ -83,6 +87,7 @@ jobs:
             apt-get update
             apt-get install -y --no-install-recommends /packages/musicscope_*_amd64.deb
             QT_QPA_PLATFORM=offscreen musicscope --self-test
+            { musicscope --check-update || true; } | grep -q "Installation : deb"
             dpkg -r musicscope
             test ! -e /opt/musicscope
           '
@@ -94,6 +99,7 @@ jobs:
             pacman -U --noconfirm /packages/musicscope-*.pkg.tar.zst
             QT_QPA_PLATFORM=offscreen musicscope --self-test
             xvfb-run -a env QT_QPA_PLATFORM=xcb musicscope --self-test
+            { musicscope --check-update || true; } | grep -q "Installation : arch"
             pacman -R --noconfirm musicscope
             test ! -e /opt/musicscope
           '
@@ -115,6 +121,9 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -134,6 +143,11 @@ jobs:
             # Le tag est créé sur le commit exact qui vient d'être construit et testé.
             gh release create "$TAG" release/*.tar.gz release/*.deb release/*.pkg.tar.zst release/SHA256SUMS --target "$GITHUB_SHA" --title "MusicScope $TAG — Debian et Arch Linux" --notes-file docs/distribution.md
           fi
+      - name: Attester la provenance des paquets (Sigstore)
+        # Vérifiable par chacun : gh attestation verify FICHIER -R 1002-AZ-2001/MusicScope
+        uses: actions/attest@v4
+        with:
+          subject-checksums: release/SHA256SUMS
 
   image:
     name: Publier l'image du NAS sur GHCR
@@ -144,6 +158,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v4
@@ -170,6 +187,7 @@ jobs:
         id: name
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - name: Pousser l'image vérifiée
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -182,3 +200,9 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ needs.version.outputs.tag }}
             org.opencontainers.image.description=MusicScope : travail du NAS (tags, SHA-256, spectre) en lecture seule
+      - name: Attester la provenance de l'image (Sigstore)
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.name.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

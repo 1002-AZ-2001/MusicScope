@@ -377,6 +377,9 @@ class AdvancedWindow(MainWindow):
         self.apply_action = self._action(organize, "Appliquer le déplacement prévisualisé…", self.apply_organization)
         self._action(organize, "Restaurer un déplacement journalisé…", self.restore_organization)
         self.apply_action.setEnabled(False)
+        from .update_gui import UpdateController
+        self.updater = UpdateController(self)
+        self.updater.install_menu(self.help_menu)
 
     def album_actions(self, selected):
         actions = super().album_actions(selected)
@@ -512,6 +515,11 @@ class AdvancedWindow(MainWindow):
                     f"{report.imported} piste(s), {report.hashes} SHA-256 et {report.spectra} spectre(s) repris")
             if report.changed or report.missing:
                 text += f" ; {report.changed} modifié(s) et {report.missing} absent(s) depuis : relus par le scan"
+            from . import __version__ as musicscope_version
+            from .updater import is_newer
+            if is_newer(musicscope_version, report.app_version):
+                text += (f" ; export produit par MusicScope {report.app_version} : mettez à jour l’image du NAS "
+                         "(docs/truenas.md)")
             self.service_log = (getattr(self, "service_log", []) + [text])[-20:]
             self.state.setText(text + ". Actualisation…")
             self._start_after_task(self.start_scan)

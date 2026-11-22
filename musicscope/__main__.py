@@ -1,6 +1,7 @@
 """Point d'entrée graphique et commandes utiles hors interface."""
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -25,6 +26,8 @@ def main() -> int:
                         help="Spectre des FLAC : une piste par album, toutes, ou aucun")
     parser.add_argument("--no-hash", action="store_true", help="Ne pas calculer les SHA-256")
     parser.add_argument("--every", type=float, metavar="HEURES", help="Recommencer toutes les N heures")
+    parser.add_argument("--check-update", action="store_true",
+                        help="Afficher la dernière version publiée et le mode de mise à jour de cette copie")
     args = parser.parse_args()
     if args.nas_work:
         # Mode sans interface : n'importe pas Qt (le conteneur du NAS ne l'installe pas).
@@ -40,6 +43,18 @@ def main() -> int:
             print(f"MusicScope : {exc}", file=sys.stderr)
             return 1
         return nas_main(args)
+    if args.check_update:
+        from .updater import UpdateError, detect_installation, fetch_latest
+        installation = detect_installation()
+        print(f"MusicScope {__version__}. Installation : {installation.kind}. {installation.detail}", flush=True)
+        try:
+            release = fetch_latest()
+        except UpdateError as exc:
+            print(f"MusicScope : {exc}", file=sys.stderr)
+            return 1
+        state = "nouvelle version disponible" if release.newer else "à jour"
+        print(f"Dernière version publiée : {release.version} ({state}) : {release.page}")
+        return 0
     try:
         if args.self_test:
             from .selftest import self_test
@@ -75,6 +90,9 @@ def main() -> int:
         app.setOrganizationName("MusicScope")
         window = MainWindow(args.cache)
         window.show()
+        if not os.environ.get("MUSICSCOPE_NO_UPDATE_CHECK"):
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(4000, window.updater.check_on_startup)  # après l'affichage, sans le ralentir
         return app.exec()
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"MusicScope : {exc}", file=sys.stderr)

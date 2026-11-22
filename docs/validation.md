@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.17.0
+# Validation — MusicScope 0.18.0
+
+## Version 0.18.0 — Mise à jour automatique
+
+Sources : API des versions GitHub (`GET /repos/{owner}/{repo}/releases/latest`, champs `digest`, `uploader`, `state` des fichiers relevés sur la v0.17.0 réelle ; 60 requêtes par heure sans compte), page de manuel de `pkexec` (126 : fenêtre d'authentification fermée ; 127 : non autorisé ou erreur), README d'`actions/attest` v4 (`subject-checksums`, `subject-name`/`subject-digest`/`push-to-registry`, permissions `id-token`, `attestations`, `artifact-metadata` présentes dans le schéma SchemaStore des workflows). Essais réels : vraie v0.17.0 lue sur GitHub, ses trois paquets téléchargés et vérifiés (origine, taille, SHA-256 croisé avec SHA256SUMS et l'empreinte GitHub) ; détection « deb » après un vrai `apt-get install` du .deb dans Debian 12, « arch » après un vrai `pacman -U` sous Arch Linux ; vraie archive portable échangée sur place, programme relancé (auto-test réussi) et ancienne version gardée. La CI de publication vérifie aussi la détection sur l'archive, le .deb et le paquet Arch installés. Tests (`tests/test_updater.py`, faux GitHub au format réel) : versions comparées numériquement, contrôle quotidien, erreurs expliquées (limite, absence, hors ligne), brouillon ou réponse illisible refusés ; fichier déposé par un autre compte, SHA256SUMS et empreinte GitHub discordants, fichier modifié, nom absent, taille dépassée et annulation : rien n'est gardé ni installé ; commandes polkit exactes, refus d'autorisation, `pkexec` absent ; archive hostile (`..`, chemin absolu, lien sortant) ou incomplète sans aucun changement ; menu Aide, préférence, version ignorée, démarrage discret hors ligne, mise à jour portable complète depuis la fenêtre puis redémarrage ; export du NAS d'une version antérieure signalé. Non essayé : la fenêtre polkit d'un vrai bureau, et une vraie mise à jour d'une version publiée vers la suivante (possible à partir de la v0.18.0). **577 tests** passent sous Python 3.12 et 3.13.
+
 
 ## Version 0.17.0 — Travail du NAS (TrueNAS SCALE)
 

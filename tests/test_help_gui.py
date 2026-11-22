@@ -43,7 +43,8 @@ def test_help_menu_is_last_and_complete(tmp_path, app):
         titles = [action.text() for action in window.menuBar().actions()]
         assert titles == ["Fichier", "Affichage", "Services", "Revue", "Session", "Tags", "Rangement", "Aide"]
         entries = [action.text() for action in window.help_menu.actions() if not action.isSeparator()]
-        assert entries == ["Documentation en ligne", "Signaler un problème…", "Ouvrir le dossier du cache",
+        assert entries == ["Rechercher une mise à jour…", "Rechercher automatiquement chaque jour",
+                           "Documentation en ligne", "Signaler un problème…", "Ouvrir le dossier du cache",
                            "À propos de MusicScope", "À propos de Qt"]
         about = next(action for action in window.help_menu.actions() if action.text() == "À propos de MusicScope")
         assert not about.shortcut().isEmpty()
