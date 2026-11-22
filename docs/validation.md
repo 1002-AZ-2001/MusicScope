@@ -1,4 +1,9 @@
-# Validation — MusicScope 0.21.0
+# Validation — MusicScope 0.22.0
+
+## Version 0.22.0 — ReplayGain et import automatique du NAS
+
+Sources : ReplayGain 2.0 mesure selon EBU R128 avec une référence de -18 LUFS (loudgain, wiki Hydrogenaudio) ; Opus utilise `R128_TRACK_GAIN`/`R128_ALBUM_GAIN` relatifs à -23 LUFS, en entier Q7.8 (RFC 7845, page de manuel de rsgain). FFmpeg 6.1 essayé ici : instances nommées `ebur128@nom` (résumés lus par nom, leur ordre de sortie variant), `framelog=verbose` pour ne garder que les résumés, journal écrit dans un fichier temporaire (un tube plein bloquerait FFmpeg). Écriture réelle vérifiée sur les cinq formats : cadres `TXXX:REPLAYGAIN_*` en MP3 (et non RVA2), atomes libres `replaygain_*` en M4A, commentaires Vorbis en FLAC, `R128_*` en Opus ; une piste muette (fichier Ogg de test, -70 LUFS) ne reçoit rien. Le scanner relève désormais ces champs ; pour les pistes déjà en cache, la détection « sans ReplayGain » lit la première piste de l'album. Tests (`tests/test_replaygain.py`) : résumés lus quel que soit leur ordre, valeurs ReplayGain 2.0 et Opus Q7.8, piste muette ; vraie mesure d'un album en un passage ; fichier non décodable expliqué ; depuis la fenêtre, album sélectionné écrit (FLAC et MP3, même gain d'album) puis annulé ; toute la bibliothèque : album déjà calculé gardé ; FFmpeg absent expliqué ; import automatique seulement si le fichier a changé, et désactivable. Non essayé : un vrai lecteur appliquant ces gains. **614 tests** passent sous Python 3.12 et 3.13.
+
 
 ## Version 0.21.0 — MusicBrainz en lot, identifiants seulement
 

@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
 )
 
 from .models import Album
-from .tagwriter import ARTWORK, FIELD_LABELS, FileEdit, describe, plan_album_edits, proposals_to_values
+from .tagwriter import (
+    ARTWORK, FIELD_LABELS, REPLAYGAIN_FIELDS, FileEdit, describe, plan_album_edits, proposals_to_values,
+)
 
 ALBUM_FIELDS = ("albumartist", "album", "date", "genre")
 ALBUM_EXTRA = ("tracktotal", "disctotal", "composer", "conductor", "comment", "musicbrainz_albumid",
@@ -22,7 +24,7 @@ TRACK_FIELDS = ("discnumber", "tracknumber", "title", "artist", "composer", "per
 LIVE_FIELDS = tuple(dict.fromkeys(("tracktotal", "disctotal", "compilation", "composer", "conductor", "performer",
                                    "lyrics", "comment", "musicbrainz_albumid", "musicbrainz_albumartistid",
                                    "musicbrainz_releasegroupid", "musicbrainz_trackid",
-                                   "musicbrainz_releasetrackid", ARTWORK)))
+                                   "musicbrainz_releasetrackid", ARTWORK, *REPLAYGAIN_FIELDS)))
 MIXED = "Valeurs différentes selon les pistes — laisser vide pour les conserver"
 COMPILATION_CHOICES = ("(inchangé)", "Oui", "Non")
 

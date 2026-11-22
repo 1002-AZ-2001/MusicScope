@@ -35,6 +35,10 @@ ALIASES = {
     "musicbrainz_trackid": ["musicbrainztrackid", "musicbrainzrecordingid"],
     "compilation": ["compilation", "TCMP", "cpil"],
     "genre": ["genre", "TCON", "©gen"],
+    "replaygain_track_gain": ["replaygain_track_gain"],
+    "replaygain_album_gain": ["replaygain_album_gain"],
+    "r128_track_gain": ["r128_track_gain"],
+    "r128_album_gain": ["r128_album_gain"],
 }
 
 _ALIAS_KEYS = {canonical: [_key(alias) for alias in aliases] for canonical, aliases in ALIASES.items()}

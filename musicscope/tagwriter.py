@@ -42,7 +42,9 @@ EXTENDED_FIELDS = ("tracktotal", "disctotal", "compilation", "composer", "conduc
                    "comment", "musicbrainz_albumid", "musicbrainz_albumartistid", "musicbrainz_artistid",
                    "musicbrainz_releasegroupid", "musicbrainz_trackid", "musicbrainz_releasetrackid")
 ARTWORK, COVER_FILE = "artwork", "coverfile"  # pochette intégrée ; fichier cover.jpg du dossier
-EDITABLE_FIELDS = BASE_FIELDS + EXTENDED_FIELDS + (ARTWORK,)
+REPLAYGAIN_FIELDS = ("replaygain_track_gain", "replaygain_track_peak", "replaygain_album_gain",
+                     "replaygain_album_peak", "r128_track_gain", "r128_album_gain")
+EDITABLE_FIELDS = BASE_FIELDS + EXTENDED_FIELDS + (ARTWORK,) + REPLAYGAIN_FIELDS
 MBID_FIELDS = {key for key in EXTENDED_FIELDS if key.startswith("musicbrainz_")}
 FIELD_LABELS = {
     "albumartist": "Artiste d’album", "album": "Album", "date": "Date", "genre": "Genre",
@@ -54,6 +56,9 @@ FIELD_LABELS = {
     "musicbrainz_artistid": "MBID d’artiste", "musicbrainz_releasegroupid": "MBID de groupe d’éditions",
     "musicbrainz_trackid": "MBID d’enregistrement", "musicbrainz_releasetrackid": "MBID de piste",
     ARTWORK: "Pochette intégrée", COVER_FILE: "Fichier de pochette",
+    "replaygain_track_gain": "ReplayGain piste", "replaygain_track_peak": "Crête piste",
+    "replaygain_album_gain": "ReplayGain album", "replaygain_album_peak": "Crête album",
+    "r128_track_gain": "R128 piste (Opus)", "r128_album_gain": "R128 album (Opus)",
 }
 UUID_TEXT = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 SEPARATOR = ";"

@@ -17,7 +17,8 @@ from mutagen.flac import Picture
 from mutagen.id3 import APIC, COMM, USLT
 
 # Champs absents d'un format, plutôt que d'inventer un tag que les autres logiciels ignoreraient.
-UNSUPPORTED = {"MP4": {"conductor", "performer"}}
+UNSUPPORTED = {"MP4": {"conductor", "performer", "r128_track_gain", "r128_album_gain"},
+               "MP3": {"r128_track_gain", "r128_album_gain"}}
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 IMAGE_TYPES = {b"\xff\xd8\xff": "image/jpeg", b"\x89PNG\r\n\x1a\n": "image/png"}
 
@@ -61,12 +62,22 @@ for _name, _frame, _key in (("lyrics", USLT, "USLT"), ("comment", COMM, "COMM"))
     if _name not in EasyID3.valid_keys:
         EasyID3.RegisterKey(_name, *_id3_text_frames(_frame, _key))
 
+# ReplayGain : cadres TXXX « REPLAYGAIN_* » lus par les lecteurs (foobar2000, rsgain, Jellyfin…),
+# à la place des cadres RVA2 qu'EasyID3 associe par défaut au motif « replaygain_*_gain ».
+for _key in ("replaygain_track_gain", "replaygain_track_peak", "replaygain_album_gain", "replaygain_album_peak"):
+    if _key not in EasyID3.Get:
+        EasyID3.RegisterTXXXKey(_key, _key.upper())
+
 # MP4 : atomes standard iTunes et atomes libres MusicBrainz absents d'EasyMP4.
 for _key, _atom in (("composer", "\xa9wrt"), ("lyrics", "\xa9lyr")):
     if _key not in EasyMP4Tags.Get:
         EasyMP4Tags.RegisterTextKey(_key, _atom)
 for _key, _name in (("musicbrainz_releasegroupid", "MusicBrainz Release Group Id"),
-                    ("musicbrainz_releasetrackid", "MusicBrainz Release Track Id")):
+                    ("musicbrainz_releasetrackid", "MusicBrainz Release Track Id"),
+                    ("replaygain_track_gain", "replaygain_track_gain"),
+                    ("replaygain_track_peak", "replaygain_track_peak"),
+                    ("replaygain_album_gain", "replaygain_album_gain"),
+                    ("replaygain_album_peak", "replaygain_album_peak")):
     if _key not in EasyMP4Tags.Get:
         EasyMP4Tags.RegisterFreeformKey(_key, _name)
 if "compilation" not in EasyMP4Tags.Get:
